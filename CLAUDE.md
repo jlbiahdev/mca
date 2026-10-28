@@ -8,8 +8,9 @@ dans la solution FETEAD (non présente ici).
 - Ne jamais committer ni pousser sur `main` ; une branche de travail et une PR par livraison.
   Le merge est décidé par Jean uniquement.
 - Identité de commit : `Claude <noreply@anthropic.com>`.
-- Ce dépôt ne contient que du **nouveau code**. Toute modification de code existant de FETEAD
-  (`Program.cs`, portail, schéma SQL) est décrite dans `docs/module08-styx-monitoring/INTEGRATION.md`
+- Ce dépôt ne contient que du **nouveau code**, à une exception validée : le portail
+  `frontend/index.html` (carte 08). Toute autre modification de code existant de FETEAD
+  (`Program.cs`, schéma SQL) est décrite dans `docs/module08-styx-monitoring/INTEGRATION.md`
   et n'est pas appliquée ici sans accord explicite.
 - Mettre à jour `summary.md` (contrat GRIM) à chaque ouverture de PR.
 - Confidentialité : aucune chaîne de connexion, aucun secret dans le code, les logs ou les documents.

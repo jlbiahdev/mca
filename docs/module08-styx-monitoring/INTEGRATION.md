@@ -1,6 +1,6 @@
 # Module 08 — Intégration dans FETEAD
 
-Ce dépôt ne contient que du **nouveau code**. Aucun fichier existant de FETEAD n'est modifié.
+Ce dépôt contient du **nouveau code**, plus le portail `frontend/index.html` (ajout de la carte 08, voir § 2.4).
 Les modifications de l'existant nécessaires pour activer le module sont listées ici,
 pour être appliquées dans un second temps.
 
@@ -13,6 +13,7 @@ pour être appliquées dans un second temps.
 | `FeteadApi.Infrastructure/Services/Monitoring/` | Options, registre des environnements, parseur de notifications, agrégateur, `BackgroundService` LISTEN, repository Dapper, service et fusion du snapshot, découpage temporel. |
 | `FeteadApi.Presentation/Monitoring/` | `MonitoringHub`, `SignalRMonitoringPublisher`, `MonitoringController` (`/monitoring/*`), `MonitoringSetup` (extensions de branchement). |
 | `frontend/pages/monitoring/` | `index.html`, `monitoring.css`, `monitoring.js`. |
+| `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.4). |
 | `tests/FeteadApi.Monitoring.Tests/` | Tests xUnit du code Infrastructure. |
 | `tests/frontend/` | Tests Node du modèle de la page. |
 
@@ -74,9 +75,15 @@ Les chaînes restent dans les variables d'environnement `StyxConnection*`, lues 
 (`appsettings.json` est ré-ajouté après les variables dans `Program.cs` et passerait devant).
 Une variable absente rend l'environnement `Unavailable` sans empêcher le démarrage.
 
-### 2.4 Carte du portail (`frontend/index.html`)
+### 2.4 Carte du portail (`frontend/index.html`) — livrée
 
-À ajouter dans `.apps-grid`, avant la carte « À venir » (qui porte aujourd'hui aussi le numéro 07) :
+Le portail est fourni dans `frontend/index.html`, avec la carte **08 — STYX Monitoring**
+ajoutée et la carte « À venir » renumérotée **09** (elle portait aussi le numéro 07).
+
+⚠️ Ce fichier est une **reconstitution** : version historique de `sgdesign` (`fet/index.html`)
+complétée d'après les photos du portail actuel (bloc utilisateur, carte LocalDb, jQuery).
+L'icône de la carte LocalDb était coupée sur la photo et a été complétée.
+**Comparer avec le vrai fichier (diff) avant de le remplacer**, ou reporter uniquement la carte :
 
 ```html
 <a class="app-card" href="/pages/monitoring/">
