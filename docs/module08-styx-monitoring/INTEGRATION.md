@@ -1,6 +1,6 @@
 # Module 08 — Intégration dans FETEAD
 
-Ce dépôt contient du **nouveau code**, plus le portail `frontend/index.html` (ajout de la carte 08, voir § 2.4).
+Ce dépôt contient du **nouveau code**, plus le portail `frontend/index.html` (ajout de la carte 08, voir § 2.5).
 Les modifications de l'existant nécessaires pour activer le module sont listées ici,
 pour être appliquées dans un second temps.
 
@@ -10,10 +10,10 @@ pour être appliquées dans un second temps.
 
 | Emplacement | Contenu |
 |-------------|---------|
-| `FeteadApi.Infrastructure/Services/Monitoring/` | `MonitoringOptions`, `MonitoringModels`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService`. |
-| `FeteadApi.Presentation/Monitoring/` | `MonitoringListenerService` (écoute PostgreSQL), `MonitoringHub`, `MonitoringController` (`/monitoring/*`). |
+| `FeteadApi.Infrastructure/Services/Monitoring/` | `MonitoringOptions`, `MonitoringModels`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService`, `MonitoringDependenciesInjection` (injection). |
+| `FeteadApi.Presentation/Monitoring/` | `MonitoringListenerService` (écoute PostgreSQL), `MonitoringHub`, `MonitoringController` (`/monitoring/*`), `MonitoringPresentationInjection` (injection). |
 | `frontend/pages/monitoring/` | `index.html`, `monitoring.css`, `monitoring.js`. |
-| `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.4). |
+| `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.5). |
 | `tests/FeteadApi.Monitoring.Tests/` | Tests xUnit du code Infrastructure. |
 | `tests/frontend/` | Tests Node du modèle de la page. |
 
@@ -33,34 +33,50 @@ Vérifier la présence de (versions à aligner sur la solution) :
 ```xml
 <PackageReference Include="Dapper" />
 <PackageReference Include="Npgsql" />
-<PackageReference Include="Microsoft.Extensions.Options" />
+<PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
 ```
 
 Aucun paquet n'est nécessaire côté Presentation : SignalR serveur fait partie d'ASP.NET Core.
 
-### 2.2 `Program.cs`
+### 2.2 `FeteadApi.Infrastructure/DependenciesInjection.cs` — une ligne
+
+Le code d'injection est livré dans `MonitoringDependenciesInjection.cs`. Il suffit de l'appeler
+depuis la méthode `Init` existante :
 
 ```csharp
 using FeteadApi.Infrastructure.Services.Monitoring;
-using FeteadApi.Presentation.Monitoring;
 
-// Avec les autres services (à côté de LocalDbControlService) :
-builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
-builder.Services.AddSingleton<MonitoringEnvironments>();
-builder.Services.AddSingleton<MonitoringRepository>();
-builder.Services.AddSingleton<MonitoringSnapshotService>();
-builder.Services.AddHostedService<MonitoringListenerService>();
-builder.Services.AddSignalR();
+public static void Init(IServiceCollection services, IConfiguration configuration)
+{
+    // … enregistrements existants …
 
-// Après app.MapControllers(); :
-app.MapHub<MonitoringHub>("/monitoringHub");
+    MonitoringDependenciesInjection.Init(services, configuration);
+}
 ```
 
-⚠️ Tant que ces lignes ne sont pas ajoutées, `MonitoringController` est quand même découvert
-par `AddControllers()` : un appel à `/monitoring/*` échouerait (services non enregistrés).
-Il n'y a aucun impact sur les autres endpoints.
+Ce qu'elle enregistre : `MonitoringOptions` (section `Monitoring`), `MonitoringEnvironments`,
+`MonitoringRepository` et `MonitoringSnapshotService`, tous en singleton.
 
-### 2.3 `appsettings.json`
+### 2.3 `Program.cs` — deux lignes
+
+Le code d'injection est livré dans `MonitoringPresentationInjection.cs`
+(SignalR, service d'écoute PostgreSQL, hub `/monitoringHub`).
+
+```csharp
+using FeteadApi.Presentation.Monitoring;
+
+// Après FeteadApi.Infrastructure.DependenciesInjection.Init(...) :
+MonitoringPresentationInjection.Init(builder.Services);
+
+// Après app.MapControllers(); :
+MonitoringPresentationInjection.MapEndpoints(app);
+```
+
+⚠️ Tant que ces trois lignes (§ 2.2 et § 2.3) ne sont pas ajoutées, `MonitoringController` est
+quand même découvert par `AddControllers()` : un appel à `/monitoring/*` échouerait (services
+non enregistrés). Il n'y a aucun impact sur les autres endpoints.
+
+### 2.4 `appsettings.json`
 
 ```json
 "Monitoring": {
@@ -78,7 +94,7 @@ Les chaînes restent dans les variables d'environnement `StyxConnection*`, lues 
 (`appsettings.json` est ré-ajouté après les variables dans `Program.cs` et passerait devant).
 Une variable absente rend l'environnement `Unavailable` sans empêcher le démarrage.
 
-### 2.4 Carte du portail (`frontend/index.html`) — livrée
+### 2.5 Carte du portail (`frontend/index.html`) — livrée
 
 Le portail est fourni dans `frontend/index.html`, avec la carte **08 — STYX Monitoring**
 ajoutée et la carte « À venir » renumérotée **09** (elle portait aussi le numéro 07).
@@ -98,7 +114,7 @@ L'icône de la carte LocalDb était coupée sur la photo et a été complétée.
 </a>
 ```
 
-### 2.5 Base de données — extension du trigger (décision D5)
+### 2.6 Base de données — extension du trigger (décision D5)
 
 Sans cette étape, le module fonctionne, mais la **progression** n'est mise à jour qu'aux
 changements d'état. Vérifier d'abord qui écoute `scheduler_events` (point ouvert n° 1 du cadrage).
@@ -134,7 +150,7 @@ CREATE TRIGGER trg_notify_data_job_state
     FOR EACH ROW EXECUTE FUNCTION public.notify_data_job_state();
 ```
 
-### 2.6 Base de données — index (recommandés)
+### 2.7 Base de données — index (recommandés)
 
 Utilisés par le comptage des tâches et la résolution tâche → job :
 

@@ -162,22 +162,20 @@ de l'équipe (`TaskFlowNotificationListener`, LocalDb), sans interface ni abstra
 | `MonitoringListenerService` | Presentation | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
 | `MonitoringHub` | Presentation | Hub SignalR, sans méthode : le navigateur écoute seulement. |
 | `MonitoringController` | Presentation | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
+| `MonitoringDependenciesInjection` | Infrastructure | Injection des services Infrastructure du module. |
+| `MonitoringPresentationInjection` | Presentation | Injection SignalR + service d'écoute, déclaration du hub. |
 
-### 5.3 Câblage `Program.cs`
+### 5.3 Injection de dépendances
 
-Enregistrements écrits en clair, comme pour LocalDb (détail dans `INTEGRATION.md`) :
+Deux classes d'injection livrées avec le module, sur le modèle de `DependenciesInjection.Init` :
 
-```csharp
-builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
-builder.Services.AddSingleton<MonitoringEnvironments>();
-builder.Services.AddSingleton<MonitoringRepository>();
-builder.Services.AddSingleton<MonitoringSnapshotService>();
-builder.Services.AddHostedService<MonitoringListenerService>();
-builder.Services.AddSignalR();
-// …
-app.MapControllers();
-app.MapHub<MonitoringHub>("/monitoringHub");
-```
+| Classe | Enregistre | Appelée depuis |
+|--------|-----------|----------------|
+| `MonitoringDependenciesInjection.Init(services, configuration)` | `MonitoringOptions`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService` | `DependenciesInjection.Init` (Infrastructure), 1 ligne |
+| `MonitoringPresentationInjection.Init(services)` / `MapEndpoints(app)` | `AddSignalR()`, `MonitoringListenerService`, hub `/monitoringHub` | `Program.cs`, 2 lignes |
+
+Tous les services sont des singletons : `MonitoringEnvironments` est partagé entre le service
+d'écoute et l'API (statut de chaque environnement). Détail des lignes à ajouter : `INTEGRATION.md`.
 
 Le frontend étant servi par l'API, le client utilise une **URL relative** (`/monitoringHub`),
 contrairement à TaskFlow (`API_HOST` codé en dur).
@@ -292,6 +290,7 @@ dans un trigger BEFORE (nouvelle décision à prendre).
 - Lecture des 3 formes de notification (job, tâche Scheduler, tâche TaskFlow).
 - Taille des intervalles du graphique et regroupement des environnements (`MonitoringSnapshotService`).
 - Environnements : variable absente → `Unavailable` sans erreur au démarrage ; code en double refusé.
+- Injection : tous les services Infrastructure se créent, `MonitoringEnvironments` est unique.
 - Non testé unitairement : `MonitoringListenerService` et les requêtes SQL (base réelle nécessaire) → vérifications manuelles de `INTEGRATION.md` § 3.
 - Front (manuel) : bascule d'env, mode historique figé, coupure / reprise du hub, absence de requêtes réseau périodiques (onglet Réseau du navigateur).
 
