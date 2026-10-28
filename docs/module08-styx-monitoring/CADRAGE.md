@@ -251,7 +251,7 @@ Notation : `activité(job) = COALESCE(change_date_time, start_date_time, submit_
 | **Progression** | `data_job.progress` (conforme spec). |
 | **UPDATED** | `activité(job)`. |
 | **Graphique (D6)** | **Flux par intervalle**, pas un stock : *Submitted* = jobs dont `submit_date_time` tombe dans l'intervalle ; *Running* = `start_date_time` ; *Finished / Failed / Canceled* = `change_date_time` des jobs actuellement dans cet état. |
-| **Intervalle du graphique** | Plus petit pas « rond » donnant au plus 60 points : 1 h → 1 min · 24 h → 30 min · 7 j → 3 h · au-delà de 60 j → multiple de jours. |
+| **Intervalle du graphique** | Selon la longueur de la période : ≤ 1 h → 1 min · ≤ 6 h → 5 min · ≤ 24 h → 30 min · ≤ 7 j → 3 h · au-delà → 50 intervalles arrondis à l'heure. |
 
 Mise à jour en direct :
 
