@@ -1,5 +1,5 @@
 using System.Text.Json;
-using FeteadApi.Infrastructure.Services.Monitoring;
+using FeteadApi.Domain.Models.Monitoring;
 
 namespace FeteadApi.Monitoring.Tests;
 

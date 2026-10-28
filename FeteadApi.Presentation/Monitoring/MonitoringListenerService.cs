@@ -1,4 +1,6 @@
 using System.Text.Json;
+using FeteadApi.Domain.Interfaces.Monitoring;
+using FeteadApi.Domain.Models.Monitoring;
 using FeteadApi.Infrastructure.Services.Monitoring;
 using Microsoft.AspNetCore.SignalR;
 using Npgsql;
@@ -10,6 +12,10 @@ namespace FeteadApi.Presentation.Monitoring;
 /// et renvoie chaque notification aux navigateurs via SignalR.
 /// Même principe que TaskFlowNotificationListener : si la connexion tombe,
 /// on attend quelques secondes et on se reconnecte.
+///
+/// Un service de fond vit aussi longtemps que l'application : il ne peut pas recevoir
+/// directement un service "Scoped" comme IMonitoringRepository. Il crée donc un scope
+/// à chaque fois qu'il en a besoin (voir FindJobIdAsync).
 /// </summary>
 public class MonitoringListenerService : BackgroundService
 {
@@ -19,18 +25,18 @@ public class MonitoringListenerService : BackgroundService
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
 
     private readonly MonitoringEnvironments _environments;
-    private readonly MonitoringRepository _repository;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHubContext<MonitoringHub> _hub;
     private readonly ILogger<MonitoringListenerService> _logger;
 
     public MonitoringListenerService(
         MonitoringEnvironments environments,
-        MonitoringRepository repository,
+        IServiceScopeFactory scopeFactory,
         IHubContext<MonitoringHub> hub,
         ILogger<MonitoringListenerService> logger)
     {
         _environments = environments;
-        _repository = repository;
+        _scopeFactory = scopeFactory;
         _hub = hub;
         _logger = logger;
     }
@@ -173,7 +179,7 @@ public class MonitoringListenerService : BackgroundService
         long? jobId = null;
         if (notification.ExternalId != null)
         {
-            jobId = await _repository.FindJobIdByExternalIdAsync(environment.ConnectionString!, notification.ExternalId.Value);
+            jobId = await FindJobIdAsync(environment, notification.ExternalId.Value);
         }
 
         var message = new TaskChangedMessage
@@ -190,6 +196,14 @@ public class MonitoringListenerService : BackgroundService
         };
 
         await _hub.Clients.All.SendAsync("TaskChanged", message);
+    }
+
+    private async Task<long?> FindJobIdAsync(MonitoringEnvironment environment, long externalId)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var repository = scope.ServiceProvider.GetRequiredService<IMonitoringRepository>();
+
+        return await repository.FindJobIdByExternalIdAsync(environment.ConnectionString!, externalId);
     }
 
     private async Task ChangeStatusAsync(MonitoringEnvironment environment, string status)

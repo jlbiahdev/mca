@@ -1,3 +1,4 @@
+using FeteadApi.Domain.Models.Monitoring;
 using Microsoft.Extensions.Options;
 
 namespace FeteadApi.Infrastructure.Services.Monitoring;
@@ -27,7 +28,9 @@ public class MonitoringEnvironment
 
 /// <summary>
 /// Liste des environnements supervisés, partagée entre le service d'écoute et l'API.
-/// Enregistrée en singleton.
+/// Enregistrée en SINGLETON (comme SqlConnectionFactory) : le statut d'écoute de chaque
+/// environnement doit être le même pour tout le monde. Pas d'interface : c'est une
+/// liste de configuration, pas un service métier.
 /// </summary>
 public class MonitoringEnvironments
 {

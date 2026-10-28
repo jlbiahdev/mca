@@ -1,4 +1,4 @@
-namespace FeteadApi.Infrastructure.Services.Monitoring;
+namespace FeteadApi.Domain.Models.Monitoring;
 
 // ═════════════════════════════════════════════════════════════════════════
 // Classes de données du module STYX Monitoring (aucune logique ici).

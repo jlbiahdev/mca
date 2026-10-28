@@ -1,6 +1,6 @@
 # Module 08 — Intégration dans FETEAD
 
-Ce dépôt contient du **nouveau code**, plus le portail `frontend/index.html` (ajout de la carte 08, voir § 2.4).
+Ce dépôt contient du **nouveau code**, plus le portail `frontend/index.html` (ajout de la carte 08, voir § 2.5).
 Les modifications de l'existant nécessaires pour activer le module sont listées ici,
 pour être appliquées dans un second temps.
 
@@ -10,15 +10,22 @@ pour être appliquées dans un second temps.
 
 | Emplacement | Contenu |
 |-------------|---------|
-| `FeteadApi.Infrastructure/Services/Monitoring/` | `MonitoringOptions`, `MonitoringModels`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService`. |
+| `FeteadApi.Domain/Interfaces/Monitoring/` | `IMonitoringRepository`, `IMonitoringSnapshotService`. |
+| `FeteadApi.Domain/Models/Monitoring/` | `MonitoringModels` (classes de données, aucune logique). |
+| `FeteadApi.Infrastructure/Repositories/Monitoring/` | `MonitoringRepository` (requêtes Dapper). |
+| `FeteadApi.Infrastructure/Services/Monitoring/` | `MonitoringOptions`, `MonitoringEnvironments`, `MonitoringSnapshotService`. |
 | `FeteadApi.Presentation/Monitoring/` | `MonitoringListenerService` (écoute PostgreSQL), `MonitoringHub`, `MonitoringController` (`/monitoring/*`). |
 | `frontend/pages/monitoring/` | `index.html`, `monitoring.css`, `monitoring.js`. |
-| `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.4). |
+| `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.5). |
 | `tests/FeteadApi.Monitoring.Tests/` | Tests xUnit du code Infrastructure. |
 | `tests/frontend/` | Tests Node du modèle de la page. |
 
-Les chemins reprennent la structure de la solution (`FeteadApi.Infrastructure`, `FeteadApi.Presentation`,
-dossier `frontend` trouvé par `FindFrontendPath`) : la copie se fait dossier par dossier.
+Les chemins et namespaces reprennent la structure de la solution (`Domain.Interfaces.<Module>`,
+`Infrastructure.Repositories.<Module>`, `Infrastructure.Services.<Module>`, dossier `frontend`) :
+la copie se fait dossier par dossier.
+
+⚠️ `FeteadApi.Domain.Models.Monitoring` est une supposition : si les modèles des autres modules
+sont rangés ailleurs dans `FeteadApi.Domain`, déplacer `MonitoringModels.cs` au même endroit.
 
 ---
 
@@ -33,34 +40,53 @@ Vérifier la présence de (versions à aligner sur la solution) :
 ```xml
 <PackageReference Include="Dapper" />
 <PackageReference Include="Npgsql" />
-<PackageReference Include="Microsoft.Extensions.Options" />
+<PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
 ```
 
 Aucun paquet n'est nécessaire côté Presentation : SignalR serveur fait partie d'ASP.NET Core.
 
-### 2.2 `Program.cs`
+### 2.2 `FeteadApi.Infrastructure/DependenciesInjection.cs`
+
+Même forme que les autres modules (`//DailyApp`…), à la fin de `Init` :
 
 ```csharp
+using FeteadApi.Domain.Interfaces.Monitoring;
+using FeteadApi.Infrastructure.Repositories.Monitoring;
 using FeteadApi.Infrastructure.Services.Monitoring;
+
+        //Monitoring
+        services.Configure<MonitoringOptions>(configuration.GetSection("Monitoring"));
+        services.AddSingleton<MonitoringEnvironments>();
+        services.AddScoped<IMonitoringRepository, MonitoringRepository>();
+        services.AddScoped<IMonitoringSnapshotService, MonitoringSnapshotService>();
+```
+
+- `MonitoringEnvironments` est un **singleton**, comme `SqlConnectionFactory` : le statut d'écoute
+  de chaque environnement doit être partagé entre le service d'écoute et l'API.
+- Le repository ne passe pas par `SqlConnectionFactory`, qui ne connaît que `DefaultConnection` :
+  le monitoring interroge une base par environnement.
+
+### 2.3 `Program.cs`
+
+```csharp
 using FeteadApi.Presentation.Monitoring;
 
-// Avec les autres services (à côté de LocalDbControlService) :
-builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
-builder.Services.AddSingleton<MonitoringEnvironments>();
-builder.Services.AddSingleton<MonitoringRepository>();
-builder.Services.AddSingleton<MonitoringSnapshotService>();
-builder.Services.AddHostedService<MonitoringListenerService>();
+// Avec les autres services, après DependenciesInjection.Init(...) :
 builder.Services.AddSignalR();
+builder.Services.AddHostedService<MonitoringListenerService>();
 
 // Après app.MapControllers(); :
 app.MapHub<MonitoringHub>("/monitoringHub");
 ```
 
-⚠️ Tant que ces lignes ne sont pas ajoutées, `MonitoringController` est quand même découvert
-par `AddControllers()` : un appel à `/monitoring/*` échouerait (services non enregistrés).
-Il n'y a aucun impact sur les autres endpoints.
+`MonitoringListenerService` est un service de fond (il vit aussi longtemps que l'application) :
+il ne reçoit pas `IMonitoringRepository` directement, il crée un scope à chaque besoin.
 
-### 2.3 `appsettings.json`
+⚠️ Tant que les lignes des § 2.2 et § 2.3 ne sont pas ajoutées, `MonitoringController` est quand
+même découvert par `AddControllers()` : un appel à `/monitoring/*` échouerait (services non
+enregistrés). Il n'y a aucun impact sur les autres endpoints.
+
+### 2.4 `appsettings.json`
 
 ```json
 "Monitoring": {
@@ -78,7 +104,7 @@ Les chaînes restent dans les variables d'environnement `StyxConnection*`, lues 
 (`appsettings.json` est ré-ajouté après les variables dans `Program.cs` et passerait devant).
 Une variable absente rend l'environnement `Unavailable` sans empêcher le démarrage.
 
-### 2.4 Carte du portail (`frontend/index.html`) — livrée
+### 2.5 Carte du portail (`frontend/index.html`) — livrée
 
 Le portail est fourni dans `frontend/index.html`, avec la carte **08 — STYX Monitoring**
 ajoutée et la carte « À venir » renumérotée **09** (elle portait aussi le numéro 07).
@@ -98,7 +124,7 @@ L'icône de la carte LocalDb était coupée sur la photo et a été complétée.
 </a>
 ```
 
-### 2.5 Base de données — extension du trigger (décision D5)
+### 2.6 Base de données — extension du trigger (décision D5)
 
 Sans cette étape, le module fonctionne, mais la **progression** n'est mise à jour qu'aux
 changements d'état. Vérifier d'abord qui écoute `scheduler_events` (point ouvert n° 1 du cadrage).
@@ -134,7 +160,7 @@ CREATE TRIGGER trg_notify_data_job_state
     FOR EACH ROW EXECUTE FUNCTION public.notify_data_job_state();
 ```
 
-### 2.6 Base de données — index (recommandés)
+### 2.7 Base de données — index (recommandés)
 
 Utilisés par le comptage des tâches et la résolution tâche → job :
 

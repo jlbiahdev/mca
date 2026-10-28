@@ -149,35 +149,48 @@ Une variable absente → environnement marqué `Unavailable`, l'API démarre qua
 
 ### 5.2 Composants
 
-Principe directeur : **lisible par un développeur junior**. On reprend les schémas déjà connus
-de l'équipe (`TaskFlowNotificationListener`, LocalDb), sans interface ni abstraction supplémentaire.
+Principe directeur : **lisible par un développeur junior**, en suivant **les conventions déjà en place
+dans FETEAD** (interface dans `Domain.Interfaces.<Module>`, repository et service dans
+`Infrastructure`, enregistrement dans `DependenciesInjection.Init`).
 
-| Fichier | Couche | Rôle |
-|---------|--------|------|
-| `MonitoringOptions` | Infrastructure | Section `Monitoring` de `appsettings.json`. |
-| `MonitoringModels` | Infrastructure | Classes de données (notification, messages SignalR, snapshot). Aucune logique. |
-| `MonitoringEnvironments` | Infrastructure | Liste des environnements, chaîne de connexion et statut d'écoute. Singleton partagé. |
-| `MonitoringRepository` | Infrastructure | Requêtes Dapper en lecture seule (§7). |
-| `MonitoringSnapshotService` | Infrastructure | Interroge chaque environnement et regroupe les résultats. |
-| `MonitoringListenerService` | Presentation | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
-| `MonitoringHub` | Presentation | Hub SignalR, sans méthode : le navigateur écoute seulement. |
-| `MonitoringController` | Presentation | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
+| Fichier | Emplacement | Rôle |
+|---------|-------------|------|
+| `IMonitoringRepository`, `IMonitoringSnapshotService` | `Domain.Interfaces.Monitoring` | Interfaces, comme pour DailyApp ou ROS. |
+| `MonitoringModels` | `Domain.Models.Monitoring` | Classes de données (notification, messages SignalR, snapshot). Aucune logique. |
+| `MonitoringRepository` | `Infrastructure.Repositories.Monitoring` | Requêtes Dapper en lecture seule (§7). |
+| `MonitoringOptions` | `Infrastructure.Services.Monitoring` | Section `Monitoring` de `appsettings.json`. |
+| `MonitoringEnvironments` | `Infrastructure.Services.Monitoring` | Liste des environnements, chaîne de connexion et statut d'écoute. |
+| `MonitoringSnapshotService` | `Infrastructure.Services.Monitoring` | Interroge chaque environnement et regroupe les résultats. |
+| `MonitoringListenerService` | `Presentation.Monitoring` | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
+| `MonitoringHub` | `Presentation.Monitoring` | Hub SignalR, sans méthode : le navigateur écoute seulement. |
+| `MonitoringController` | `Presentation.Monitoring` | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
 
-### 5.3 Câblage `Program.cs`
+### 5.3 Injection de dépendances
 
-Enregistrements écrits en clair, comme pour LocalDb (détail dans `INTEGRATION.md`) :
+Dans `DependenciesInjection.Init`, comme les autres modules :
 
 ```csharp
-builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
-builder.Services.AddSingleton<MonitoringEnvironments>();
-builder.Services.AddSingleton<MonitoringRepository>();
-builder.Services.AddSingleton<MonitoringSnapshotService>();
-builder.Services.AddHostedService<MonitoringListenerService>();
+//Monitoring
+services.Configure<MonitoringOptions>(configuration.GetSection("Monitoring"));
+services.AddSingleton<MonitoringEnvironments>();
+services.AddScoped<IMonitoringRepository, MonitoringRepository>();
+services.AddScoped<IMonitoringSnapshotService, MonitoringSnapshotService>();
+```
+
+Dans `Program.cs` (partie Presentation) :
+
+```csharp
 builder.Services.AddSignalR();
+builder.Services.AddHostedService<MonitoringListenerService>();
 // …
-app.MapControllers();
 app.MapHub<MonitoringHub>("/monitoringHub");
 ```
+
+Deux écarts assumés, commentés dans le code :
+- `MonitoringEnvironments` est un singleton (comme `SqlConnectionFactory`) : le statut d'écoute est partagé.
+- `MonitoringListenerService`, service de fond, crée un scope pour utiliser le repository.
+
+Détail et emplacement exact des lignes : `INTEGRATION.md`.
 
 Le frontend étant servi par l'API, le client utilise une **URL relative** (`/monitoringHub`),
 contrairement à TaskFlow (`API_HOST` codé en dur).
@@ -251,7 +264,7 @@ Notation : `activité(job) = COALESCE(change_date_time, start_date_time, submit_
 | **Progression** | `data_job.progress` (conforme spec). |
 | **UPDATED** | `activité(job)`. |
 | **Graphique (D6)** | **Flux par intervalle**, pas un stock : *Submitted* = jobs dont `submit_date_time` tombe dans l'intervalle ; *Running* = `start_date_time` ; *Finished / Failed / Canceled* = `change_date_time` des jobs actuellement dans cet état. |
-| **Intervalle du graphique** | Plus petit pas « rond » donnant au plus 60 points : 1 h → 1 min · 24 h → 30 min · 7 j → 3 h · au-delà de 60 j → multiple de jours. |
+| **Intervalle du graphique** | Selon la longueur de la période : ≤ 1 h → 1 min · ≤ 6 h → 5 min · ≤ 24 h → 30 min · ≤ 7 j → 3 h · au-delà → 50 intervalles arrondis à l'heure. |
 
 Mise à jour en direct :
 
@@ -292,6 +305,7 @@ dans un trigger BEFORE (nouvelle décision à prendre).
 - Lecture des 3 formes de notification (job, tâche Scheduler, tâche TaskFlow).
 - Taille des intervalles du graphique et regroupement des environnements (`MonitoringSnapshotService`).
 - Environnements : variable absente → `Unavailable` sans erreur au démarrage ; code en double refusé.
+- Snapshot : un environnement en panne ou non configuré est signalé, les autres s'affichent.
 - Non testé unitairement : `MonitoringListenerService` et les requêtes SQL (base réelle nécessaire) → vérifications manuelles de `INTEGRATION.md` § 3.
 - Front (manuel) : bascule d'env, mode historique figé, coupure / reprise du hub, absence de requêtes réseau périodiques (onglet Réseau du navigateur).
 
