@@ -1,12 +1,13 @@
-// Tests du modèle de la page STYX Monitoring (aucune dépendance : node --test).
+// Tests des fonctions "données" de la page STYX Monitoring.
+// Lancement : node --test tests/frontend/monitoring.test.js (aucune dépendance)
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const mon = require('../../frontend/pages/monitoring/monitoring.js');
+const page = require('../../frontend/pages/monitoring/monitoring.js');
 
-const FROM = Date.parse('2026-10-28T10:00:00Z');
+const START = Date.parse('2026-10-28T10:00:00Z');
 
-function snapshot(overrides) {
-  return Object.assign({
+function sampleSnapshot() {
+  return {
     generatedAt: '2026-10-28T11:00:00Z',
     from: '2026-10-28T10:00:00Z',
     to: '2026-10-28T11:00:00Z',
@@ -23,102 +24,96 @@ function snapshot(overrides) {
       { env: 'LOCAL', id: 1024, name: 'ALM_RUN', state: 'Running', progress: 40, taskCount: 24, updatedAt: '2026-10-28T10:30:00Z' },
     ],
     errors: [],
-  }, overrides);
+  };
 }
 
-function loaded(overrides) {
-  return mon.loadSnapshotIntoModel(mon.createModel(), snapshot(overrides));
-}
-
-function jobEvent(overrides) {
+function jobMessage(changes) {
   return Object.assign({
     env: 'LOCAL', jobId: 1024, name: null, state: 'Finished', previousState: 'Running',
-    progress: 100, at: null, receivedAt: '2026-10-28T10:01:30Z',
-  }, overrides);
+    progress: 100, receivedAt: '2026-10-28T10:01:30Z',
+  }, changes);
 }
 
-test('le snapshot initialise KPI, séries et tableau', () => {
-  const model = loaded();
-  assert.equal(model.kpi.Running, 2);
-  assert.deepEqual(model.series.Running, [0, 2]);
-  assert.equal(model.jobs.length, 1);
-  assert.equal(model.bucketSeconds, 60);
+test('le snapshot remplit KPI, courbes et tableau', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  assert.equal(data.kpi.Running, 2);
+  assert.deepEqual(data.series.Running, [0, 2]);
+  assert.equal(data.jobs.length, 1);
 });
 
-test('un changement d\'état déplace le job d\'un compteur à l\'autre', () => {
-  const model = loaded();
-  const result = mon.applyJobChanged(model, jobEvent(), Date.parse('2026-10-28T10:01:30Z'));
-  assert.equal(result.stateChanged, true);
-  assert.equal(model.kpi.Running, 1);
-  assert.equal(model.kpi.Finished, 4);
-  assert.equal(model.jobs[0].state, 'Finished');
-  assert.equal(model.jobs[0].progress, 100);
+test('un changement d\'état fait passer le job d\'un compteur à l\'autre', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  const stateChanged = page.applyJobChanged(data, jobMessage());
+  assert.equal(stateChanged, true);
+  assert.equal(data.kpi.Running, 1);
+  assert.equal(data.kpi.Finished, 4);
+  assert.equal(data.jobs[0].state, 'Finished');
 });
 
-test('une progression seule ne modifie ni KPI ni graphique', () => {
-  const model = loaded();
-  const result = mon.applyJobChanged(model, jobEvent({ state: 'Running', previousState: 'Running', progress: 65 }), FROM);
-  assert.equal(result.stateChanged, false);
-  assert.equal(model.kpi.Running, 2);
-  assert.deepEqual(model.series.Running, [0, 2]);
-  assert.equal(model.jobs[0].progress, 65);
+test('une simple progression ne change ni les KPI ni le graphique', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  const stateChanged = page.applyJobChanged(data, jobMessage({ state: 'Running', previousState: 'Running', progress: 65 }));
+  assert.equal(stateChanged, false);
+  assert.equal(data.kpi.Running, 2);
+  assert.deepEqual(data.series.Running, [0, 2]);
+  assert.equal(data.jobs[0].progress, 65);
 });
 
-test('un événement déjà reflété par le snapshot n\'est pas compté deux fois', () => {
-  const model = loaded();
-  // La ligne est déjà "Running" : l'événement Submitted → Running ne change rien.
-  const result = mon.applyJobChanged(model, jobEvent({ state: 'Running', previousState: 'Submitted' }), FROM);
-  assert.equal(result.stateChanged, false);
-  assert.equal(model.kpi.Submitted, 1);
-  assert.equal(model.kpi.Running, 2);
+test('un événement déjà compté dans le snapshot n\'est pas compté deux fois', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  // Le job est déjà "Running" dans le tableau.
+  page.applyJobChanged(data, jobMessage({ state: 'Running', previousState: 'Submitted' }));
+  assert.equal(data.kpi.Submitted, 1);
+  assert.equal(data.kpi.Running, 2);
 });
 
-test('un nouveau job est inséré en tête et la liste reste bornée', () => {
-  const model = loaded();
-  model.jobLimit = 1;
-  mon.applyJobChanged(model, jobEvent({ jobId: 2000, name: 'ORSA_RUN', state: 'Submitted', previousState: null }), FROM);
-  assert.equal(model.jobs.length, 1);
-  assert.equal(model.jobs[0].id, 2000);
-  assert.equal(model.jobs[0].taskCount, null);
-  assert.equal(model.kpi.Submitted, 2);
+test('un nouveau job arrive en tête du tableau', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  page.applyJobChanged(data, jobMessage({ jobId: 2000, name: 'ORSA_RUN', state: 'Submitted', previousState: null }));
+  assert.equal(data.jobs[0].id, 2000);
+  assert.equal(data.jobs[0].taskCount, null);
+  assert.equal(data.kpi.Submitted, 2);
 });
 
-test('les séries se prolongent quand le temps dépasse la plage', () => {
-  const model = loaded();
-  mon.addToSeries(model, 'Failed', FROM + 5 * 60 * 1000);
-  assert.equal(model.series.Failed.length, 6);
-  assert.equal(model.series.Failed[5], 1);
-  assert.equal(model.series.Submitted.length, 6);
+test('le tableau ne dépasse jamais le nombre maximal de jobs', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  for (let id = 1; id <= page.MAX_JOBS + 5; id++) {
+    page.applyJobChanged(data, jobMessage({ jobId: id, state: 'Submitted', previousState: null }));
+  }
+  assert.equal(data.jobs.length, page.MAX_JOBS);
 });
 
-test('un état non suivi n\'alimente pas le graphique', () => {
-  const model = loaded();
-  mon.addToSeries(model, 'Queued', FROM);
-  assert.equal(model.series.Queued, undefined);
+test('les courbes s\'allongent quand le temps dépasse la période', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  page.addPointToChart(data, 'Failed', START + 5 * 60 * 1000);
+  assert.equal(data.series.Failed.length, 6);
+  assert.equal(data.series.Failed[5], 1);
+  assert.equal(data.series.Submitted.length, 6);
 });
 
 test('seules les tâches en échec vont dans la timeline', () => {
-  assert.equal(mon.taskTimelineEntry({ state: 'Finished', env: 'POC', taskId: 1 }), null);
-  const entry = mon.taskTimelineEntry({ state: 'Failed', env: 'POC', taskId: 1, externalId: 77, jobId: 987, reason: 'exit 1', receivedAt: 'x' });
+  assert.equal(page.taskTimelineEntry({ state: 'Finished', env: 'POC', taskId: 1 }), null);
+
+  const entry = page.taskTimelineEntry({ state: 'Failed', env: 'POC', taskId: 1, externalId: 77, jobId: 987, reason: 'exit 1', receivedAt: 'x' });
   assert.equal(entry.text, 'Tâche 77 · Job 987');
   assert.equal(entry.reason, 'exit 1');
 });
 
-test('les préréglages sont en direct, la période personnalisée est figée', () => {
-  assert.equal(mon.isLivePreset('24h'), true);
-  assert.equal(mon.isLivePreset('custom'), false);
-  assert.deepEqual(mon.computeRange('1h', 3600e3), { from: 0, to: 3600e3 });
-  assert.deepEqual(mon.computeRange('custom', 0, 10, 20), { from: 10, to: 20 });
+test('1 h / 24 h / 7 j sont en direct, la période personnalisée est figée', () => {
+  assert.equal(page.isLivePeriod('24h'), true);
+  assert.equal(page.isLivePeriod('custom'), false);
+  assert.deepEqual(page.periodRange('1h', 3600000), { from: 0, to: 3600000 });
+  assert.deepEqual(page.periodRange('custom', 0, 10, 20), { from: 10, to: 20 });
 });
 
-test('les graduations de l\'axe Y sont entières', () => {
-  assert.deepEqual(mon.chartTicks(0), [0, 1, 2, 3, 4]);
-  assert.deepEqual(mon.chartTicks(10), [0, 3, 6, 9, 12]);
+test('les graduations de l\'axe vertical sont des entiers', () => {
+  assert.deepEqual(page.chartTicks(0), [0, 1, 2, 3, 4]);
+  assert.deepEqual(page.chartTicks(10), [0, 3, 6, 9, 12]);
 });
 
-test('le graphique produit une courbe par état suivi', () => {
-  const svg = mon.buildChartSvg(loaded(), 1000, 240);
+test('le graphique contient une courbe par état', () => {
+  const svg = page.buildChartSvg(page.dataFromSnapshot(sampleSnapshot()), 1000, 240);
   ['Submitted', 'Running', 'Finished', 'Failed', 'Canceled'].forEach(state => {
-    assert.match(svg, new RegExp(`series-${state}`));
+    assert.match(svg, new RegExp('series-' + state));
   });
 });

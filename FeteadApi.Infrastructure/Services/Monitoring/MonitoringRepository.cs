@@ -1,34 +1,32 @@
-using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Dapper;
-using Microsoft.Extensions.Options;
 using Npgsql;
 
 namespace FeteadApi.Infrastructure.Services.Monitoring;
 
 /// <summary>
-/// Lectures Dapper sur les bases Styx (public.data_job / public.data_task).
-/// Lecture seule : le module ne modifie aucune donnée.
+/// Requêtes SQL du module, en lecture seule, sur public.data_job et public.data_task.
+/// Chaque méthode reçoit la chaîne de connexion de l'environnement à interroger.
 /// </summary>
-public sealed class MonitoringRepository : ITaskJobResolver
+public class MonitoringRepository
 {
-    // Date d'activité d'un job : aucune colonne updated_at n'existe sur data_job.
-    private const string ActivitySql =
+    // data_job n'a pas de colonne "updated_at" : la date d'activité d'un job
+    // est la plus récente des dates connues.
+    private const string ActivityDate =
         "COALESCE(j.change_date_time, j.start_date_time, j.submit_date_time, j.create_date_time)";
 
-    private const string StateCountsSql = $"""
+    /// <summary>Nombre de jobs par état, pour les KPI.</summary>
+    private const string StateCountsSql = $@"
         SELECT j.state AS State, COUNT(*)::int AS Count
         FROM public.data_job j
-        WHERE {ActivitySql} BETWEEN @From AND @To
-        GROUP BY j.state
-        """;
+        WHERE {ActivityDate} BETWEEN @From AND @To
+        GROUP BY j.state";
 
-    // Graphique (décision D6) : flux par intervalle reconstitué depuis les dates de data_job.
-    private const string BucketsSql = """
+    /// <summary>
+    /// Graphique : pour chaque intervalle, combien de jobs ont été soumis, démarrés,
+    /// ou terminés (Finished / Failed / Canceled). Reconstitué à partir des dates de data_job.
+    /// BucketIndex = numéro de l'intervalle (0 = premier intervalle de la plage).
+    /// </summary>
+    private const string BucketsSql = @"
         SELECT e.state AS State,
                FLOOR(EXTRACT(EPOCH FROM (e.at - @From))::double precision / @BucketSeconds)::int AS BucketIndex,
                COUNT(*)::int AS Count
@@ -36,173 +34,75 @@ public sealed class MonitoringRepository : ITaskJobResolver
             SELECT 'Submitted' AS state, j.submit_date_time AS at
             FROM public.data_job j
             WHERE j.submit_date_time BETWEEN @From AND @To
+
             UNION ALL
+
             SELECT 'Running', j.start_date_time
             FROM public.data_job j
             WHERE j.start_date_time BETWEEN @From AND @To
+
             UNION ALL
+
             SELECT j.state, j.change_date_time
             FROM public.data_job j
             WHERE j.state IN ('Finished', 'Failed', 'Canceled')
               AND j.change_date_time BETWEEN @From AND @To
         ) e
-        GROUP BY e.state, BucketIndex
-        """;
+        GROUP BY e.state, BucketIndex";
 
-    private const string LatestJobsSql = $"""
+    /// <summary>Derniers jobs modifiés, avec leur nombre de tâches.</summary>
+    private const string LatestJobsSql = $@"
         SELECT j.id AS Id,
                j.name AS Name,
                j.state AS State,
                j.progress AS Progress,
-               {ActivitySql} AS UpdatedAt,
+               {ActivityDate} AS UpdatedAt,
                (SELECT COUNT(*) FROM public.data_task t WHERE t.job_id = j.id) AS TaskCount
         FROM public.data_job j
-        WHERE {ActivitySql} BETWEEN @From AND @To
+        WHERE {ActivityDate} BETWEEN @From AND @To
         ORDER BY UpdatedAt DESC, j.id DESC
-        LIMIT @Limit
-        """;
+        LIMIT @Limit";
 
-    // Si plusieurs data_task partagent un external_id (cf. point ouvert du cadrage), on prend la plus récente.
-    private const string ResolveJobIdSql = """
+    /// <summary>
+    /// Retrouve le job d'une tâche TaskFlow/Scheduler grâce à data_task.external_id.
+    /// Si plusieurs data_task ont le même external_id, on prend la plus récente.
+    /// </summary>
+    private const string FindJobIdSql = @"
         SELECT t.job_id
         FROM public.data_task t
         WHERE t.external_id = @ExternalId
         ORDER BY t.id DESC
-        LIMIT 1
-        """;
-
-    private readonly ConcurrentDictionary<(string Env, long ExternalId), long> _jobIdCache = new();
-    private readonly int _cacheSize;
-
-    public MonitoringRepository(IOptions<MonitoringOptions> options)
-    {
-        _cacheSize = Math.Max(0, options.Value.TaskJobCacheSize);
-    }
+        LIMIT 1";
 
     public async Task<EnvironmentSnapshot> GetSnapshotAsync(
-        MonitoringEnvironment environment,
-        DateTimeOffset from,
-        DateTimeOffset to,
-        int bucketSeconds,
-        int latestJobsLimit,
-        CancellationToken ct)
+        string connectionString, DateTime from, DateTime to, int bucketSeconds, int jobsLimit)
     {
-        var range = new
+        var parameters = new
         {
-            From = from.UtcDateTime,
-            To = to.UtcDateTime,
+            From = from,
+            To = to,
             BucketSeconds = (double)bucketSeconds,
-            Limit = latestJobsLimit
+            Limit = jobsLimit
         };
 
-        await using var connection = await OpenAsync(environment, ct);
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
 
-        var stateCounts = await connection.QueryAsync<StateCountRow>(
-            new CommandDefinition(StateCountsSql, range, cancellationToken: ct));
-        var buckets = await connection.QueryAsync<BucketRow>(
-            new CommandDefinition(BucketsSql, range, cancellationToken: ct));
-        var jobs = await connection.QueryAsync<JobRow>(
-            new CommandDefinition(LatestJobsSql, range, cancellationToken: ct));
+        var snapshot = new EnvironmentSnapshot
+        {
+            StateCounts = (await connection.QueryAsync<StateCount>(StateCountsSql, parameters)).ToList(),
+            Buckets = (await connection.QueryAsync<BucketCount>(BucketsSql, parameters)).ToList(),
+            Jobs = (await connection.QueryAsync<JobRow>(LatestJobsSql, parameters)).ToList()
+        };
 
-        return new EnvironmentSnapshot(
-            environment.Code,
-            stateCounts.ToDictionary(row => row.State, row => row.Count, StringComparer.Ordinal),
-            buckets.Select(row => new BucketCount(row.State, row.BucketIndex, row.Count)).ToList(),
-            jobs.Select(row => row.ToDto(environment.Code)).ToList());
+        return snapshot;
     }
 
-    public async Task<long?> ResolveJobIdAsync(
-        MonitoringEnvironment environment,
-        long externalId,
-        CancellationToken ct)
+    public async Task<long?> FindJobIdByExternalIdAsync(string connectionString, long externalId)
     {
-        var key = (environment.Code, externalId);
-        if (_jobIdCache.TryGetValue(key, out var cached))
-        {
-            return cached;
-        }
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
 
-        await using var connection = await OpenAsync(environment, ct);
-        var jobId = await connection.QuerySingleOrDefaultAsync<long?>(
-            new CommandDefinition(ResolveJobIdSql, new { ExternalId = externalId }, cancellationToken: ct));
-
-        if (jobId is not null)
-        {
-            Remember(key, jobId.Value);
-        }
-
-        return jobId;
-    }
-
-    private void Remember((string Env, long ExternalId) key, long jobId)
-    {
-        if (_cacheSize == 0)
-        {
-            return;
-        }
-
-        // Éviction volontairement simple : on vide le cache quand il est plein.
-        if (_jobIdCache.Count >= _cacheSize)
-        {
-            _jobIdCache.Clear();
-        }
-
-        _jobIdCache[key] = jobId;
-    }
-
-    private static async Task<NpgsqlConnection> OpenAsync(MonitoringEnvironment environment, CancellationToken ct)
-    {
-        if (!environment.IsConfigured)
-        {
-            throw new InvalidOperationException($"Environnement {environment.Code} non configuré.");
-        }
-
-        var connection = new NpgsqlConnection(environment.ConnectionString);
-        try
-        {
-            await connection.OpenAsync(ct);
-            return connection;
-        }
-        catch
-        {
-            await connection.DisposeAsync();
-            throw;
-        }
-    }
-
-    // ── Lignes Dapper ────────────────────────────────────────────────────────
-
-    private sealed class StateCountRow
-    {
-        public string State { get; set; } = string.Empty;
-        public int Count { get; set; }
-    }
-
-    private sealed class BucketRow
-    {
-        public string State { get; set; } = string.Empty;
-        public int BucketIndex { get; set; }
-        public int Count { get; set; }
-    }
-
-    private sealed class JobRow
-    {
-        public long Id { get; set; }
-        public string? Name { get; set; }
-        public string State { get; set; } = string.Empty;
-        public int Progress { get; set; }
-        public DateTime? UpdatedAt { get; set; }
-        public long TaskCount { get; set; }
-
-        public JobRowDto ToDto(string env) => new(
-            env,
-            Id,
-            Name,
-            State,
-            Progress,
-            TaskCount,
-            UpdatedAt is null
-                ? null
-                : new DateTimeOffset(DateTime.SpecifyKind(UpdatedAt.Value, DateTimeKind.Utc)));
+        return await connection.QuerySingleOrDefaultAsync<long?>(FindJobIdSql, new { ExternalId = externalId });
     }
 }

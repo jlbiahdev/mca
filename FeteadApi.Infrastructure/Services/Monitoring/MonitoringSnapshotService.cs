@@ -1,123 +1,138 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace FeteadApi.Infrastructure.Services.Monitoring;
 
-/// <summary>Raison d'un refus de snapshot, renvoyée au client en 400.</summary>
-public sealed class MonitoringRequestException : Exception
-{
-    public MonitoringRequestException(string message) : base(message)
-    {
-    }
-}
-
 /// <summary>
-/// Construit le snapshot d'une plage sur les environnements demandés.
-/// Un environnement en échec n'empêche pas les autres de répondre.
+/// Construit l'état affiché par la page (KPI, graphique, tableau) pour une période
+/// et une liste d'environnements. Un environnement en erreur n'empêche pas les autres.
 /// </summary>
-public sealed class MonitoringSnapshotService
+public class MonitoringSnapshotService
 {
-    private const string UnavailableMessage = "Environnement indisponible";
+    /// <summary>États suivis par les KPI et le graphique (spec Module 08).</summary>
+    public static readonly string[] TrackedStates = { "Submitted", "Running", "Finished", "Failed", "Canceled" };
 
-    private readonly MonitoringEnvironmentRegistry _registry;
     private readonly MonitoringRepository _repository;
     private readonly MonitoringOptions _options;
-    private readonly TimeProvider _timeProvider;
     private readonly ILogger<MonitoringSnapshotService> _logger;
 
     public MonitoringSnapshotService(
-        MonitoringEnvironmentRegistry registry,
         MonitoringRepository repository,
         IOptions<MonitoringOptions> options,
-        TimeProvider timeProvider,
         ILogger<MonitoringSnapshotService> logger)
     {
-        _registry = registry;
         _repository = repository;
         _options = options.Value;
-        _timeProvider = timeProvider;
         _logger = logger;
     }
 
-    public async Task<MonitoringSnapshot> GetSnapshotAsync(
-        IReadOnlyCollection<string> environmentCodes,
-        DateTimeOffset from,
-        DateTimeOffset to,
-        CancellationToken ct)
+    public async Task<MonitoringSnapshot> GetSnapshotAsync(List<MonitoringEnvironment> environments, DateTime from, DateTime to)
     {
-        ValidateRange(from, to);
-        var environments = ResolveEnvironments(environmentCodes);
+        // Heure prise AVANT les requêtes : le navigateur rejouera les événements reçus après.
+        var generatedAt = DateTime.UtcNow;
+        var bucketSeconds = ChooseBucketSeconds(from, to);
 
-        // Horodaté avant les requêtes : le client rejoue les événements reçus après cet instant.
-        var generatedAt = _timeProvider.GetUtcNow();
-        var bucketSeconds = MonitoringTimeBuckets.ChooseBucketSeconds(from, to);
+        var results = new List<EnvironmentSnapshot>();
+        var errors = new List<EnvironmentError>();
 
-        var results = await Task.WhenAll(environments.Select(environment =>
-            LoadEnvironmentAsync(environment, from, to, bucketSeconds, ct)));
+        foreach (var environment in environments)
+        {
+            if (!environment.IsConfigured)
+            {
+                errors.Add(new EnvironmentError { Env = environment.Code, Message = "Environnement indisponible" });
+                continue;
+            }
 
-        var snapshots = results.Where(r => r.Snapshot is not null).Select(r => r.Snapshot!).ToList();
-        var errors = results.Where(r => r.Error is not null).Select(r => r.Error!).ToList();
+            try
+            {
+                var result = await _repository.GetSnapshotAsync(
+                    environment.ConnectionString!, from, to, bucketSeconds, _options.LatestJobsLimit);
 
-        return MonitoringSnapshotMerger.Merge(
-            snapshots, errors, generatedAt, from, to, bucketSeconds, _options.LatestJobsLimit);
+                // Chaque ligne de job doit savoir de quel environnement elle vient.
+                foreach (var job in result.Jobs)
+                    job.Env = environment.Code;
+
+                results.Add(result);
+            }
+            catch (Exception ex)
+            {
+                // Le détail reste dans les logs : il peut contenir des informations de connexion.
+                _logger.LogError(ex, "[Monitoring:{Env}] Snapshot impossible", environment.Code);
+                errors.Add(new EnvironmentError { Env = environment.Code, Message = "Environnement indisponible" });
+            }
+        }
+
+        var snapshot = Merge(results, from, to, bucketSeconds, _options.LatestJobsLimit);
+        snapshot.GeneratedAt = generatedAt;
+        snapshot.Errors = errors;
+        return snapshot;
     }
 
-    private void ValidateRange(DateTimeOffset from, DateTimeOffset to)
+    /// <summary>
+    /// Taille d'un intervalle du graphique, selon la longueur de la période.
+    /// Objectif : environ 50 points sur la courbe, quelle que soit la période.
+    /// </summary>
+    public static int ChooseBucketSeconds(DateTime from, DateTime to)
     {
-        if (to <= from)
-        {
-            throw new MonitoringRequestException("La fin de la plage doit être postérieure au début.");
-        }
+        var duration = to - from;
 
-        if (to - from > TimeSpan.FromDays(_options.MaxRangeDays))
-        {
-            throw new MonitoringRequestException(
-                $"La plage ne peut pas dépasser {_options.MaxRangeDays} jours.");
-        }
+        if (duration <= TimeSpan.FromHours(1)) return 60;            // 1 minute
+        if (duration <= TimeSpan.FromHours(6)) return 5 * 60;        // 5 minutes
+        if (duration <= TimeSpan.FromHours(24)) return 30 * 60;      // 30 minutes
+        if (duration <= TimeSpan.FromDays(7)) return 3 * 3600;       // 3 heures
+
+        // Au-delà de 7 jours : 50 intervalles, arrondis à l'heure supérieure.
+        var hours = (int)Math.Ceiling(duration.TotalHours / 50);
+        return hours * 3600;
     }
 
-    private IReadOnlyList<MonitoringEnvironment> ResolveEnvironments(IReadOnlyCollection<string> codes)
+    /// <summary>Regroupe les résultats de plusieurs environnements.</summary>
+    public static MonitoringSnapshot Merge(
+        List<EnvironmentSnapshot> results, DateTime from, DateTime to, int bucketSeconds, int jobsLimit)
     {
-        var environments = new List<MonitoringEnvironment>();
+        var bucketCount = (int)Math.Ceiling((to - from).TotalSeconds / bucketSeconds);
+        if (bucketCount < 1)
+            bucketCount = 1;
 
-        foreach (var code in codes.Distinct(StringComparer.OrdinalIgnoreCase))
+        var snapshot = new MonitoringSnapshot { From = from, To = to, BucketSeconds = bucketSeconds };
+
+        // On prépare un compteur à 0 et une série vide pour chaque état suivi.
+        foreach (var state in TrackedStates)
         {
-            var environment = _registry.Find(code)
-                ?? throw new MonitoringRequestException($"Environnement inconnu : {code}");
-            environments.Add(environment);
+            snapshot.Kpi[state] = 0;
+            snapshot.Series.Add(new StateSeries { State = state, Counts = new int[bucketCount] });
         }
 
-        return environments;
-    }
+        foreach (var result in results)
+        {
+            // KPI : les états non suivis (Queued, Validating…) sont ignorés.
+            foreach (var stateCount in result.StateCounts)
+            {
+                if (snapshot.Kpi.ContainsKey(stateCount.State))
+                    snapshot.Kpi[stateCount.State] += stateCount.Count;
+            }
 
-    private async Task<(EnvironmentSnapshot? Snapshot, EnvironmentErrorDto? Error)> LoadEnvironmentAsync(
-        MonitoringEnvironment environment,
-        DateTimeOffset from,
-        DateTimeOffset to,
-        int bucketSeconds,
-        CancellationToken ct)
-    {
-        if (!environment.IsConfigured)
-        {
-            return (null, new EnvironmentErrorDto(environment.Code, UnavailableMessage));
+            // Graphique
+            foreach (var bucket in result.Buckets)
+            {
+                var series = snapshot.Series.FirstOrDefault(s => s.State == bucket.State);
+                if (series == null)
+                    continue;
+
+                // Un événement exactement à la fin de la période tombe dans le dernier intervalle.
+                var index = Math.Min(Math.Max(bucket.BucketIndex, 0), bucketCount - 1);
+                series.Counts[index] += bucket.Count;
+            }
+
+            snapshot.Jobs.AddRange(result.Jobs);
         }
 
-        try
-        {
-            var snapshot = await _repository.GetSnapshotAsync(
-                environment, from, to, bucketSeconds, _options.LatestJobsLimit, ct);
-            return (snapshot, null);
-        }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            // Le détail reste dans les logs : il peut contenir des informations de connexion.
-            _logger.LogError(ex, "[Monitoring:{Env}] Snapshot impossible", environment.Code);
-            return (null, new EnvironmentErrorDto(environment.Code, UnavailableMessage));
-        }
+        // Tableau : les jobs les plus récemment modifiés d'abord, tous environnements confondus.
+        snapshot.Jobs = snapshot.Jobs
+            .OrderByDescending(job => job.UpdatedAt)
+            .Take(jobsLimit)
+            .ToList();
+
+        return snapshot;
     }
 }

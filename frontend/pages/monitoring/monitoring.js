@@ -1,277 +1,243 @@
-/* ── FETEAD — STYX Monitoring (Module 08)
-   Temps réel : snapshot REST au chargement / changement de filtre / reconnexion,
-   puis deltas SignalR. Aucun rafraîchissement périodique des données.
-─────────────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════
+   FETEAD — STYX Monitoring (Module 08)
 
-// L'API sert elle-même le frontend : URLs relatives.
-const MON_API = '/monitoring';
-const MON_HUB = '/monitoringHub';
+   Fonctionnement :
+   1. Au chargement, on demande à l'API l'état de la période (le "snapshot").
+   2. Ensuite, le serveur nous envoie chaque changement via SignalR.
+   3. On recharge le snapshot seulement quand l'utilisateur change un filtre
+      ou après une coupure. Jamais de rechargement automatique toutes les X secondes.
+═══════════════════════════════════════════════════════════════════════ */
 
-const MON_TRACKED_STATES = ['Submitted', 'Running', 'Finished', 'Failed', 'Canceled'];
-const MON_STATE_LABELS = {
-  Submitted: 'Soumis', Running: 'Démarrés', Finished: 'Terminés', Failed: 'Échoués', Canceled: 'Annulés',
+// ── Configuration ────────────────────────────────────────────────────────
+// L'API sert elle-même cette page : on utilise des adresses relatives.
+const API = '/monitoring';
+const HUB = '/monitoringHub';
+
+const TRACKED_STATES = ['Submitted', 'Running', 'Finished', 'Failed', 'Canceled'];
+const STATE_LABELS = {
+  Submitted: 'Soumis',
+  Running: 'Démarrés',
+  Finished: 'Terminés',
+  Failed: 'Échoués',
+  Canceled: 'Annulés',
 };
-const MON_RANGE_PRESETS = { '1h': 3600e3, '24h': 86400e3, '7d': 7 * 86400e3 };
-const MON_DEFAULT_PRESET = '24h';
-const MON_TIMELINE_MAX = 200;
-const MON_JOBS_LIMIT = 50;
-const MON_STORAGE_KEY = 'fetead-monitoring';
-const MON_HUB_RETRY_MS = 10000;
+const ONE_HOUR = 60 * 60 * 1000;
+const PERIODS = { '1h': ONE_HOUR, '24h': 24 * ONE_HOUR, '7d': 7 * 24 * ONE_HOUR };
+const DEFAULT_PERIOD = '24h';
+const MAX_JOBS = 50;
+const MAX_TIMELINE_ENTRIES = 200;
+const STORAGE_KEY = 'fetead-monitoring';
 
-/* ════════════════════════════════════════════════════════════════════════
-   MODÈLE — fonctions pures, sans DOM (testées sous Node)
-════════════════════════════════════════════════════════════════════════ */
+// ── État de la page ──────────────────────────────────────────────────────
+let data = emptyData();          // ce qui est affiché : KPI, courbes, jobs
+let environments = [];           // [{ env: 'LOCAL', status: 'Listening' }, …]
+let selectedEnvs = [];           // codes cochés, ex. ['LOCAL', 'POC']
+let period = DEFAULT_PERIOD;     // '1h', '24h', '7d' ou 'custom'
+let timeline = [];               // derniers événements, le plus récent en premier
 
-function createModel() {
-  return {
-    from: 0,
-    to: 0,
-    generatedAt: 0,
-    bucketSeconds: 60,
-    kpi: emptyKpi(),
-    series: emptySeries(1),
-    jobs: [],
-    jobLimit: MON_JOBS_LIMIT,
-  };
-}
+let isLoading = false;           // un snapshot est en cours de chargement
+let eventsDuringLoading = [];    // événements reçus pendant ce chargement
+let lastRequestNumber = 0;       // pour ignorer une réponse arrivée trop tard
 
-function emptyKpi() {
+
+/* ═══════════════════════════════════════════════════════════════════════
+   1. DONNÉES — fonctions sans affichage (testées dans tests/frontend)
+═══════════════════════════════════════════════════════════════════════ */
+
+function emptyData() {
   const kpi = {};
-  MON_TRACKED_STATES.forEach(state => { kpi[state] = 0; });
-  return kpi;
-}
-
-function emptySeries(length) {
   const series = {};
-  MON_TRACKED_STATES.forEach(state => { series[state] = new Array(length).fill(0); });
-  return series;
+  TRACKED_STATES.forEach(state => {
+    kpi[state] = 0;
+    series[state] = [0];
+  });
+  return { from: 0, to: 0, generatedAt: 0, bucketSeconds: 60, kpi, series, jobs: [] };
 }
 
-function loadSnapshotIntoModel(model, snapshot) {
-  model.from = Date.parse(snapshot.from);
-  model.to = Date.parse(snapshot.to);
-  model.generatedAt = Date.parse(snapshot.generatedAt);
-  model.bucketSeconds = snapshot.bucketSeconds;
+/** Transforme la réponse de GET /monitoring/snapshot en données de la page. */
+function dataFromSnapshot(snapshot) {
+  const result = emptyData();
+  result.from = Date.parse(snapshot.from);
+  result.to = Date.parse(snapshot.to);
+  result.generatedAt = Date.parse(snapshot.generatedAt);
+  result.bucketSeconds = snapshot.bucketSeconds;
 
-  model.kpi = emptyKpi();
-  MON_TRACKED_STATES.forEach(state => {
-    model.kpi[state] = (snapshot.kpi && snapshot.kpi[state]) || 0;
+  TRACKED_STATES.forEach(state => {
+    result.kpi[state] = snapshot.kpi[state] || 0;
   });
 
-  const length = Math.max(1, ...(snapshot.series || []).map(s => s.counts.length));
-  model.series = emptySeries(length);
-  (snapshot.series || []).forEach(s => {
-    if (model.series[s.state]) model.series[s.state] = s.counts.slice();
+  snapshot.series.forEach(serie => {
+    if (result.series[serie.state]) {
+      result.series[serie.state] = serie.counts.slice();
+    }
   });
 
-  model.jobs = (snapshot.jobs || []).map(job => Object.assign({}, job));
-  return model;
+  result.jobs = snapshot.jobs.map(job => Object.assign({}, job));
+  return result;
 }
 
 /**
- * Applique un JobChanged. L'état connu de la ligne prime sur previousState :
- * un événement déjà reflété par le snapshot n'est ainsi pas compté deux fois.
+ * Applique un message "JobChanged" aux données.
+ * Renvoie true si l'état du job a changé (et pas seulement sa progression).
  */
-function applyJobChanged(model, evt, nowMs) {
-  const index = model.jobs.findIndex(job => job.env === evt.env && job.id === evt.jobId);
-  const existing = index >= 0 ? model.jobs[index] : null;
-  const previousState = existing ? existing.state : (evt.previousState || null);
-  const stateChanged = previousState !== evt.state;
+function applyJobChanged(pageData, message) {
+  let job = pageData.jobs.find(j => j.env === message.env && j.id === message.jobId);
+
+  // Si le job est déjà dans le tableau, son état affiché fait foi :
+  // un événement déjà pris en compte par le snapshot n'est pas compté deux fois.
+  const oldState = job ? job.state : message.previousState;
+  const stateChanged = oldState !== message.state;
 
   if (stateChanged) {
-    if (previousState && model.kpi[previousState] > 0) model.kpi[previousState]--;
-    if (model.kpi[evt.state] !== undefined) model.kpi[evt.state]++;
-    addToSeries(model, evt.state, nowMs);
+    if (oldState && pageData.kpi[oldState] > 0) pageData.kpi[oldState]--;
+    if (pageData.kpi[message.state] !== undefined) pageData.kpi[message.state]++;
+    addPointToChart(pageData, message.state, Date.parse(message.receivedAt));
   }
 
-  const row = existing || {
-    env: evt.env, id: evt.jobId, name: null, state: evt.state, progress: 0, taskCount: null, updatedAt: null,
-  };
-  if (evt.name) row.name = evt.name;
-  row.state = evt.state;
-  if (evt.progress !== null && evt.progress !== undefined) row.progress = evt.progress;
-  row.updatedAt = evt.receivedAt;
+  if (!job) {
+    job = { env: message.env, id: message.jobId, name: null, state: message.state, progress: 0, taskCount: null };
+  }
+  if (message.name) job.name = message.name;
+  if (message.progress !== null && message.progress !== undefined) job.progress = message.progress;
+  job.state = message.state;
+  job.updatedAt = message.receivedAt;
 
-  if (index >= 0) model.jobs.splice(index, 1);
-  model.jobs.unshift(row);
-  if (model.jobs.length > model.jobLimit) model.jobs.length = model.jobLimit;
+  // Le job modifié passe en tête du tableau.
+  pageData.jobs = [job].concat(pageData.jobs.filter(j => j !== job)).slice(0, MAX_JOBS);
 
-  return { stateChanged, previousState };
+  return stateChanged;
 }
 
-/** Ajoute un événement au graphique ; prolonge les séries si le temps dépasse la plage. */
-function addToSeries(model, state, nowMs) {
-  if (!model.series[state] || !model.bucketSeconds) return;
+/** Ajoute 1 à la courbe d'un état, dans l'intervalle qui contient "time". */
+function addPointToChart(pageData, state, time) {
+  if (!pageData.series[state]) return;
 
-  const index = Math.floor((nowMs - model.from) / (model.bucketSeconds * 1000));
+  const index = Math.floor((time - pageData.from) / (pageData.bucketSeconds * 1000));
   if (index < 0) return;
 
-  MON_TRACKED_STATES.forEach(s => {
-    while (model.series[s].length <= index) model.series[s].push(0);
+  // Le temps avance : on allonge toutes les courbes si besoin.
+  TRACKED_STATES.forEach(s => {
+    while (pageData.series[s].length <= index) pageData.series[s].push(0);
   });
-  model.series[state][index]++;
-  model.to = Math.max(model.to, nowMs);
+
+  pageData.series[state][index]++;
 }
 
-/** Les tâches n'alimentent la timeline qu'en cas d'échec, pour ne pas noyer les jobs. */
-function taskTimelineEntry(evt) {
-  if (evt.state !== 'Failed') return null;
-  const job = evt.jobId !== null && evt.jobId !== undefined ? ` · Job ${evt.jobId}` : '';
-  return {
-    at: evt.receivedAt,
-    env: evt.env,
-    state: evt.state,
-    text: `Tâche ${evt.externalId ?? evt.taskId}${job}`,
-    reason: evt.reason || null,
-  };
+/** Ligne de timeline pour un job. */
+function jobTimelineEntry(message) {
+  const name = message.name ? ' · ' + message.name : '';
+  return { at: message.receivedAt, env: message.env, state: message.state, text: 'Job ' + message.jobId + name, reason: null };
 }
 
-function jobTimelineEntry(evt) {
-  return {
-    at: evt.receivedAt,
-    env: evt.env,
-    state: evt.state,
-    text: `Job ${evt.jobId}${evt.name ? ' · ' + evt.name : ''}`,
-    reason: null,
-  };
+/** Ligne de timeline pour une tâche : seulement les échecs, sinon la timeline serait noyée. */
+function taskTimelineEntry(message) {
+  if (message.state !== 'Failed') return null;
+
+  const taskNumber = message.externalId !== null && message.externalId !== undefined ? message.externalId : message.taskId;
+  const job = message.jobId !== null && message.jobId !== undefined ? ' · Job ' + message.jobId : '';
+  return { at: message.receivedAt, env: message.env, state: message.state, text: 'Tâche ' + taskNumber + job, reason: message.reason || null };
 }
 
-function computeRange(preset, nowMs, customFrom, customTo) {
-  if (preset === 'custom') return { from: customFrom, to: customTo };
-  const span = MON_RANGE_PRESETS[preset] || MON_RANGE_PRESETS[MON_DEFAULT_PRESET];
-  return { from: nowMs - span, to: nowMs };
+/** Début et fin de la période choisie, en millisecondes. */
+function periodRange(periodCode, now, customFrom, customTo) {
+  if (periodCode === 'custom') return { from: customFrom, to: customTo };
+  return { from: now - (PERIODS[periodCode] || PERIODS[DEFAULT_PERIOD]), to: now };
 }
 
-function isLivePreset(preset) {
-  return preset !== 'custom';
+/** Les périodes 1 h / 24 h / 7 j sont en direct ; la période personnalisée est figée. */
+function isLivePeriod(periodCode) {
+  return periodCode !== 'custom';
 }
 
-/** Graduations entières de l'axe Y : 4 intervalles réguliers. */
+/** Graduations de l'axe vertical : 5 valeurs entières régulières. */
 function chartTicks(maxValue) {
   const step = Math.max(1, Math.ceil(maxValue / 4));
   return [0, step, step * 2, step * 3, step * 4];
 }
 
-function buildChartSvg(model, width, height) {
-  const pad = { left: 40, right: 14, top: 12, bottom: 26 };
-  const plotW = width - pad.left - pad.right;
-  const plotH = height - pad.top - pad.bottom;
-  const points = Math.max(1, ...MON_TRACKED_STATES.map(s => model.series[s].length));
-  const maxValue = Math.max(0, ...MON_TRACKED_STATES.map(s => Math.max(0, ...model.series[s])));
+/** Dessine le graphique en SVG (une courbe par état). */
+function buildChartSvg(pageData, width, height) {
+  const left = 40, right = 14, top = 12, bottom = 26;
+  const plotWidth = width - left - right;
+  const plotHeight = height - top - bottom;
+
+  const pointCount = Math.max(...TRACKED_STATES.map(s => pageData.series[s].length));
+  const maxValue = Math.max(...TRACKED_STATES.map(s => Math.max(...pageData.series[s])));
   const ticks = chartTicks(maxValue);
-  const top = ticks[ticks.length - 1];
+  const topValue = ticks[ticks.length - 1];
 
-  const x = i => pad.left + (points === 1 ? plotW / 2 : (i * plotW) / (points - 1));
-  const y = v => pad.top + plotH - (v / top) * plotH;
+  const xOf = i => left + (pointCount === 1 ? plotWidth / 2 : (i * plotWidth) / (pointCount - 1));
+  const yOf = value => top + plotHeight - (value / topValue) * plotHeight;
 
-  const parts = [`<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Évolution des DataJobs">`];
+  let svg = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="Évolution des DataJobs">`;
 
+  // Lignes horizontales et valeurs de l'axe vertical
   ticks.forEach(tick => {
-    const ty = y(tick).toFixed(1);
-    parts.push(`<line class="grid-line" x1="${pad.left}" x2="${width - pad.right}" y1="${ty}" y2="${ty}"/>`);
-    parts.push(`<text class="axis-label" x="${pad.left - 8}" y="${ty}" text-anchor="end" dominant-baseline="middle">${tick}</text>`);
+    const y = yOf(tick).toFixed(1);
+    svg += `<line class="grid-line" x1="${left}" x2="${width - right}" y1="${y}" y2="${y}"/>`;
+    svg += `<text class="axis-label" x="${left - 8}" y="${y}" text-anchor="end" dominant-baseline="middle">${tick}</text>`;
   });
 
-  const longRange = (points * model.bucketSeconds) > 86400;
-  const labelIndexes = [...new Set([0, 1, 2, 3, 4].map(k => Math.round((k * (points - 1)) / 4)))];
-  labelIndexes.forEach(i => {
-    const label = formatAxisTime(model.from + i * model.bucketSeconds * 1000, longRange);
-    parts.push(`<text class="axis-label" x="${x(i).toFixed(1)}" y="${height - 6}" text-anchor="middle">${label}</text>`);
+  // 5 heures sur l'axe horizontal (avec la date si la période dépasse 24 h)
+  const showDate = pointCount * pageData.bucketSeconds > 24 * 3600;
+  for (let k = 0; k <= 4; k++) {
+    const i = Math.round((k * (pointCount - 1)) / 4);
+    const label = formatAxisTime(pageData.from + i * pageData.bucketSeconds * 1000, showDate);
+    svg += `<text class="axis-label" x="${xOf(i).toFixed(1)}" y="${height - 6}" text-anchor="middle">${label}</text>`;
+  }
+
+  // Une courbe par état
+  TRACKED_STATES.forEach(state => {
+    const points = pageData.series[state].map((value, i) => xOf(i).toFixed(1) + ',' + yOf(value).toFixed(1)).join(' ');
+    svg += `<polyline class="series series-${state}" points="${points}"/>`;
   });
 
-  MON_TRACKED_STATES.forEach(state => {
-    const coords = model.series[state].map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-    parts.push(`<polyline class="series series-${state}" points="${coords}"/>`);
-  });
-
-  parts.push('</svg>');
-  return parts.join('');
+  return svg + '</svg>';
 }
 
-function formatAxisTime(ms, withDate) {
-  const d = new Date(ms);
-  const pad2 = n => String(n).padStart(2, '0');
-  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
-  return withDate ? `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)} ${time}` : time;
+function formatAxisTime(time, withDate) {
+  const d = new Date(time);
+  const two = n => String(n).padStart(2, '0');
+  const hour = two(d.getHours()) + ':' + two(d.getMinutes());
+  return withDate ? two(d.getDate()) + '/' + two(d.getMonth() + 1) + ' ' + hour : hour;
 }
 
-/* ════════════════════════════════════════════════════════════════════════
-   PAGE — état, rendu, SignalR
-════════════════════════════════════════════════════════════════════════ */
 
-const mon = {
-  model: createModel(),
-  environments: [],          // [{ env, status, since }]
-  selectedEnvs: new Set(),
-  selectionInitialized: false, // la sélection n'est initialisée qu'une fois (préférences ou tout)
-  preset: MON_DEFAULT_PRESET,
-  loading: false,
-  pending: [],               // événements reçus pendant un chargement
-  requestSeq: 0,             // ignore les réponses de snapshot périmées
-  timeline: [],
-};
+/* ═══════════════════════════════════════════════════════════════════════
+   2. CHARGEMENT — appels à l'API
+═══════════════════════════════════════════════════════════════════════ */
 
-function monEsc(value) {
-  if (value === null || value === undefined) return '';
-  return String(value)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
-
-function monFmt(iso) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleString('fr-FR', {
-    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
-}
-
-function monSdot(state) {
-  const safe = monEsc(state);
-  return `<span class="s-wrap s-${safe}"><span class="s-dot"></span>${safe}</span>`;
-}
-
-function isLive() {
-  return isLivePreset(mon.preset);
-}
-
-// ── Préférences (par navigateur, facultatives) ──
-function readPrefs() {
-  try { return JSON.parse(localStorage.getItem(MON_STORAGE_KEY)) || {}; } catch (e) { return {}; }
-}
-
-function savePrefs() {
-  try {
-    localStorage.setItem(MON_STORAGE_KEY, JSON.stringify({ envs: [...mon.selectedEnvs], preset: mon.preset }));
-  } catch (e) { /* stockage indisponible : sans conséquence */ }
-}
-
-// ── API ──
-async function monFetch(path) {
-  const response = await fetch(MON_API + path);
+async function callApi(path) {
+  const response = await fetch(API + path);
   if (!response.ok) {
     let message = response.status + ' ' + response.statusText;
-    try { message = (await response.json()).message || message; } catch (e) { /* corps non JSON */ }
+    try { message = (await response.json()).message || message; } catch (e) { /* réponse non JSON */ }
     throw new Error(message);
   }
   return response.json();
 }
 
 async function loadEnvironments() {
-  mon.environments = await monFetch('/environments');
-  const known = mon.environments.map(e => e.env);
-  const saved = (readPrefs().envs || []).filter(code => known.includes(code));
-  if (!mon.selectionInitialized) {
-    mon.selectedEnvs = new Set(saved.length ? saved : known);
-    mon.selectionInitialized = true;
+  environments = await callApi('/environments');
+
+  // Premier chargement : on reprend le choix mémorisé, sinon tout est coché.
+  if (selectedEnvs.length === 0) {
+    const allCodes = environments.map(e => e.env);
+    const saved = (readSavedChoices().envs || []).filter(code => allCodes.includes(code));
+    selectedEnvs = saved.length > 0 ? saved : allCodes;
   }
-  renderEnvTabs();
+
+  renderEnvironmentButtons();
 }
 
 async function loadSnapshot() {
-  const seq = ++mon.requestSeq;
+  // Chaque chargement a un numéro : si l'utilisateur change de filtre pendant
+  // un chargement, la réponse de l'ancien chargement sera ignorée.
+  lastRequestNumber++;
+  const requestNumber = lastRequestNumber;
 
-  if (!mon.selectedEnvs.size) {
-    mon.model = createModel();
+  if (selectedEnvs.length === 0) {
+    data = emptyData();
     showMessage('Aucun environnement sélectionné.');
     renderAll();
     return;
@@ -280,187 +246,261 @@ async function loadSnapshot() {
   const range = currentRange();
   if (!range) return;
 
-  mon.loading = true;
-  mon.pending = [];
+  isLoading = true;
+  eventsDuringLoading = [];
 
-  const query = '?envs=' + encodeURIComponent([...mon.selectedEnvs].join(','))
+  const query = '?envs=' + encodeURIComponent(selectedEnvs.join(','))
     + '&from=' + encodeURIComponent(new Date(range.from).toISOString())
     + '&to=' + encodeURIComponent(new Date(range.to).toISOString());
 
   try {
-    const snapshot = await monFetch('/snapshot' + query);
-    if (seq !== mon.requestSeq) return;
+    const snapshot = await callApi('/snapshot' + query);
+    if (requestNumber !== lastRequestNumber) return; // réponse périmée
 
-    mon.model = loadSnapshotIntoModel(createModel(), snapshot);
-    showSnapshotErrors(snapshot.errors || []);
-    replayPending();
+    data = dataFromSnapshot(snapshot);
+    showSnapshotErrors(snapshot.errors);
+    replayEventsReceivedDuringLoading();
     renderAll();
   } catch (error) {
-    if (seq === mon.requestSeq) showMessage('Chargement impossible : ' + error.message);
+    if (requestNumber === lastRequestNumber) showMessage('Chargement impossible : ' + error.message);
   } finally {
-    if (seq === mon.requestSeq) mon.loading = false;
+    if (requestNumber === lastRequestNumber) isLoading = false;
   }
 }
 
+/** Période affichée, ou null si la période personnalisée est invalide. */
 function currentRange() {
-  if (mon.preset !== 'custom') return computeRange(mon.preset, Date.now());
+  if (period !== 'custom') return periodRange(period, Date.now());
 
   const from = Date.parse($('#range-from').val());
   const to = Date.parse($('#range-to').val());
   if (isNaN(from) || isNaN(to) || to <= from) {
-    showMessage('Période personnalisée invalide : la fin doit suivre le début.');
+    showMessage('Période personnalisée invalide : la fin doit être après le début.');
     return null;
   }
-  return computeRange('custom', Date.now(), from, to);
+  return periodRange('custom', Date.now(), from, to);
 }
 
-function replayPending() {
-  const events = mon.pending;
-  mon.pending = [];
-  events
-    .filter(item => Date.parse(item.evt.receivedAt) > mon.model.generatedAt)
-    .forEach(item => (item.type === 'job' ? handleJobChanged(item.evt) : handleTaskChanged(item.evt)));
+/** Événements arrivés pendant le chargement : on garde ceux postérieurs au snapshot. */
+function replayEventsReceivedDuringLoading() {
+  eventsDuringLoading
+    .filter(item => Date.parse(item.message.receivedAt) > data.generatedAt)
+    .forEach(item => {
+      if (item.type === 'job') handleJobChanged(item.message);
+      else handleTaskChanged(item.message);
+    });
+  eventsDuringLoading = [];
 }
 
-// ── Événements temps réel ──
-function acceptsEvent(evt) {
-  return isLive() && mon.selectedEnvs.has(evt.env);
+/** Recharge tout (après connexion ou reconnexion au hub). */
+function reloadEverything() {
+  loadEnvironments()
+    .then(loadSnapshot)
+    .catch(error => showMessage('Chargement impossible : ' + error.message));
 }
 
-function handleJobChanged(evt) {
-  const result = applyJobChanged(mon.model, evt, Date.parse(evt.receivedAt) || Date.now());
-  if (result.stateChanged) pushTimeline(jobTimelineEntry(evt));
+
+/* ═══════════════════════════════════════════════════════════════════════
+   3. TEMPS RÉEL — messages SignalR
+═══════════════════════════════════════════════════════════════════════ */
+
+function isDisplayed(message) {
+  return isLivePeriod(period) && selectedEnvs.includes(message.env);
 }
 
-function handleTaskChanged(evt) {
-  const entry = taskTimelineEntry(evt);
-  if (entry) pushTimeline(entry);
+function handleJobChanged(message) {
+  const stateChanged = applyJobChanged(data, message);
+  if (stateChanged) addToTimeline(jobTimelineEntry(message));
 }
 
-function onJobChanged(evt) {
-  if (!acceptsEvent(evt)) return;
-  if (mon.loading) { mon.pending.push({ type: 'job', evt }); return; }
-  handleJobChanged(evt);
+function handleTaskChanged(message) {
+  const entry = taskTimelineEntry(message);
+  if (entry) addToTimeline(entry);
+}
+
+function onJobChanged(message) {
+  if (!isDisplayed(message)) return;
+  if (isLoading) { eventsDuringLoading.push({ type: 'job', message }); return; }
+
+  handleJobChanged(message);
   renderKpi();
   renderJobs();
   renderChart();
 }
 
-function onTaskChanged(evt) {
-  if (!acceptsEvent(evt)) return;
-  if (mon.loading) { mon.pending.push({ type: 'task', evt }); return; }
-  handleTaskChanged(evt);
+function onTaskChanged(message) {
+  if (!isDisplayed(message)) return;
+  if (isLoading) { eventsDuringLoading.push({ type: 'task', message }); return; }
+
+  handleTaskChanged(message);
 }
 
-function onEnvironmentStatusChanged(evt) {
-  const environment = mon.environments.find(e => e.env === evt.env);
-  if (environment) Object.assign(environment, evt);
-  renderEnvTabs();
+function onEnvironmentStatusChanged(message) {
+  const environment = environments.find(e => e.env === message.env);
+  if (environment) environment.status = message.status;
+  renderEnvironmentButtons();
 
-  // Reprise d'écoute : des NOTIFY ont pu être perdus pendant la coupure.
-  if (evt.status === 'Listening' && mon.selectedEnvs.has(evt.env) && isLive()) loadSnapshot();
-}
-
-function pushTimeline(entry) {
-  mon.timeline.unshift(entry);
-  if (mon.timeline.length > MON_TIMELINE_MAX) mon.timeline.length = MON_TIMELINE_MAX;
-  renderTimeline();
-}
-
-// ── Rendu ──
-function renderAll() {
-  renderModeLabel();
-  renderKpi();
-  renderChart();
-  renderJobs();
-  renderTimeline();
-}
-
-function renderModeLabel() {
-  $('#mode-label').text(isLive() ? 'En direct' : 'Vue figée');
-}
-
-function envDotClass(status) {
-  switch (status) {
-    case 'Listening': return 'live';
-    case 'Unavailable': return 'unavailable';
-    default: return 'reconnecting';
+  // L'écoute de cet environnement vient de reprendre : des événements ont pu
+  // être perdus pendant la coupure, on recharge.
+  if (message.status === 'Listening' && selectedEnvs.includes(message.env) && isLivePeriod(period)) {
+    loadSnapshot();
   }
 }
 
-function renderEnvTabs() {
-  if (!mon.environments.length) {
+function addToTimeline(entry) {
+  timeline.unshift(entry);
+  timeline = timeline.slice(0, MAX_TIMELINE_ENTRIES);
+  renderTimeline();
+}
+
+function setConnectionStatus(status) {
+  const dot = $('#conn-dot');
+  const label = $('#conn-label');
+  dot.removeClass('live offline reconnecting');
+
+  if (status === 'live') { dot.addClass('live'); label.text('En direct'); }
+  if (status === 'offline') { dot.addClass('offline'); label.text('Déconnecté'); }
+  if (status === 'reconnecting') { dot.addClass('reconnecting'); label.text('Reconnexion…'); }
+}
+
+function connectToHub() {
+  const connection = new signalR.HubConnectionBuilder()
+    .withUrl(HUB)
+    // Délais entre deux tentatives de reconnexion (en ms).
+    .withAutomaticReconnect([0, 2000, 5000, 10000, 30000, 30000, 60000, 60000])
+    .configureLogging(signalR.LogLevel.Warning)
+    .build();
+
+  connection.on('JobChanged', onJobChanged);
+  connection.on('TaskChanged', onTaskChanged);
+  connection.on('EnvironmentStatusChanged', onEnvironmentStatusChanged);
+
+  connection.onreconnecting(() => setConnectionStatus('reconnecting'));
+  connection.onreconnected(() => { setConnectionStatus('live'); reloadEverything(); });
+  connection.onclose(() => setConnectionStatus('offline'));
+
+  connection.start()
+    .then(() => setConnectionStatus('live'))
+    .catch(() => setConnectionStatus('offline'))
+    // Hub joignable ou non, on affiche l'état de la période.
+    .finally(reloadEverything);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════
+   4. AFFICHAGE
+═══════════════════════════════════════════════════════════════════════ */
+
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('fr-FR', {
+    day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+}
+
+/** Pastille colorée + nom de l'état (même rendu que TaskFlow). */
+function stateBadge(state) {
+  const safe = escapeHtml(state);
+  return `<span class="s-wrap s-${safe}"><span class="s-dot"></span>${safe}</span>`;
+}
+
+function renderAll() {
+  $('#mode-label').text(isLivePeriod(period) ? 'En direct' : 'Vue figée');
+  renderKpi();
+  renderChart();
+  renderJobs();
+  renderTimeline();
+}
+
+function renderEnvironmentButtons() {
+  if (environments.length === 0) {
     $('#env-tabs').html('<span class="mon-hint">Aucun environnement configuré</span>');
     return;
   }
-  const html = mon.environments.map(e => `
-    <button class="mode-tab ${mon.selectedEnvs.has(e.env) ? 'active' : ''}" data-env="${monEsc(e.env)}" title="${monEsc(e.status)}">
-      <span class="conn-dot ${envDotClass(e.status)}"></span>${monEsc(e.env)}
+
+  const dotClass = { Listening: 'live', Unavailable: 'unavailable' };
+  const html = environments.map(e => `
+    <button class="mode-tab ${selectedEnvs.includes(e.env) ? 'active' : ''}" data-env="${escapeHtml(e.env)}" title="${escapeHtml(e.status)}">
+      <span class="conn-dot ${dotClass[e.status] || 'reconnecting'}"></span>${escapeHtml(e.env)}
     </button>`).join('');
   $('#env-tabs').html(html);
 }
 
-function renderRangeTabs() {
+function renderPeriodButtons() {
   $('#range-tabs .mode-tab').each(function () {
-    $(this).toggleClass('active', $(this).data('range') === mon.preset);
+    $(this).toggleClass('active', $(this).data('range') === period);
   });
-  $('#custom-range').toggleClass('open', mon.preset === 'custom');
+  $('#custom-range').toggleClass('open', period === 'custom');
 }
 
 function renderKpi() {
-  MON_TRACKED_STATES.forEach(state => $('#stat-' + state).text(mon.model.kpi[state] || 0));
+  TRACKED_STATES.forEach(state => $('#stat-' + state).text(data.kpi[state]));
 }
 
 function renderChart() {
-  // Largeur réelle du conteneur : le SVG garde des textes à taille constante.
+  // On dessine à la largeur réelle du bloc, pour garder des textes lisibles.
   const width = Math.max(320, Math.round($('#chart').width() || 1000));
-  $('#chart').html(buildChartSvg(mon.model, width, 240));
+  $('#chart').html(buildChartSvg(data, width, 240));
 }
 
 function renderLegend() {
-  const html = MON_TRACKED_STATES
-    .map(state => `<span class="s-wrap s-${state}"><span class="s-dot"></span>${MON_STATE_LABELS[state]}</span>`)
+  const html = TRACKED_STATES
+    .map(state => `<span class="s-wrap s-${state}"><span class="s-dot"></span>${STATE_LABELS[state]}</span>`)
     .join('');
   $('#chart-legend').html(html);
 }
 
 function renderJobs() {
-  const jobs = mon.model.jobs;
-  $('#jobs-count').text(jobs.length);
-  if (!jobs.length) {
+  $('#jobs-count').text(data.jobs.length);
+
+  if (data.jobs.length === 0) {
     $('#jobs-tbody').html('<tr class="loading-row"><td colspan="7">Aucun job sur la période</td></tr>');
     return;
   }
-  const html = jobs.map(job => {
+
+  const html = data.jobs.map(job => {
     const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
+    const taskCount = job.taskCount === null || job.taskCount === undefined ? '—' : escapeHtml(job.taskCount);
     return `<tr>
-      <td class="td-env">${monEsc(job.env)}</td>
-      <td class="td-id">#${monEsc(job.id)}</td>
-      <td class="td-name" title="${monEsc(job.name)}">${monEsc(job.name) || '—'}</td>
-      <td>${monSdot(job.state)}</td>
-      <td><div class="mon-progress">
-        <div class="mon-progress-track"><div class="mon-progress-fill" style="width:${progress}%"></div></div>
-        <span class="mon-progress-value">${progress}%</span>
-      </div></td>
-      <td class="td-id">${job.taskCount === null || job.taskCount === undefined ? '—' : monEsc(job.taskCount)}</td>
-      <td class="td-date">${monFmt(job.updatedAt)}</td>
+      <td class="td-env">${escapeHtml(job.env)}</td>
+      <td class="td-id">#${escapeHtml(job.id)}</td>
+      <td class="td-name" title="${escapeHtml(job.name)}">${escapeHtml(job.name) || '—'}</td>
+      <td>${stateBadge(job.state)}</td>
+      <td>
+        <div class="mon-progress">
+          <div class="mon-progress-track"><div class="mon-progress-fill" style="width:${progress}%"></div></div>
+          <span class="mon-progress-value">${progress}%</span>
+        </div>
+      </td>
+      <td class="td-id">${taskCount}</td>
+      <td class="td-date">${formatDate(job.updatedAt)}</td>
     </tr>`;
   }).join('');
   $('#jobs-tbody').html(html);
 }
 
 function renderTimeline() {
-  if (!mon.timeline.length) {
+  if (timeline.length === 0) {
     $('#timeline-body').html('<div class="empty-row">En attente d\'événements…</div>');
     return;
   }
-  const html = mon.timeline.map(entry => `
-    <div class="mon-tl-row">
+
+  const html = timeline.map(entry => {
+    const reason = entry.reason ? ` <span class="mon-tl-reason">${escapeHtml(entry.reason)}</span>` : '';
+    return `<div class="mon-tl-row">
       <span class="mon-tl-time">${new Date(entry.at).toLocaleTimeString('fr-FR')}</span>
-      <span class="mon-tl-env">[${monEsc(entry.env)}]</span>
-      <span class="mon-tl-text">${monEsc(entry.text)}${entry.reason ? ` <span class="mon-tl-reason">${monEsc(entry.reason)}</span>` : ''}</span>
-      ${monSdot(entry.state)}
-    </div>`).join('');
+      <span class="mon-tl-env">[${escapeHtml(entry.env)}]</span>
+      <span class="mon-tl-text">${escapeHtml(entry.text)}${reason}</span>
+      ${stateBadge(entry.state)}
+    </div>`;
+  }).join('');
   $('#timeline-body').html(html);
 }
 
@@ -469,139 +509,107 @@ function showMessage(text) {
 }
 
 function showSnapshotErrors(errors) {
-  if (!errors.length) { $('#mon-message').removeClass('visible').text(''); return; }
-  showMessage(errors.map(e => `${e.env} : ${e.message}`).join(' · '));
-}
-
-// ── SignalR ──
-function setConnStatus(status) {
-  const dot = $('#conn-dot');
-  const label = $('#conn-label');
-  dot.removeClass('live offline reconnecting');
-  switch (status) {
-    case 'live': dot.addClass('live'); label.text('En direct'); break;
-    case 'offline': dot.addClass('offline'); label.text('Déconnecté'); break;
-    case 'reconnecting': dot.addClass('reconnecting'); label.text('Reconnexion…'); break;
-    default: label.text('—');
+  if (errors.length === 0) {
+    $('#mon-message').removeClass('visible').text('');
+    return;
   }
+  showMessage(errors.map(e => e.env + ' : ' + e.message).join(' · '));
 }
 
-function initHub() {
-  const connection = new signalR.HubConnectionBuilder()
-    .withUrl(MON_HUB)
-    .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
-    .configureLogging(signalR.LogLevel.Warning)
-    .build();
 
-  connection.on('JobChanged', onJobChanged);
-  connection.on('TaskChanged', onTaskChanged);
-  connection.on('EnvironmentStatusChanged', onEnvironmentStatusChanged);
+/* ═══════════════════════════════════════════════════════════════════════
+   5. ACTIONS DE L'UTILISATEUR
+═══════════════════════════════════════════════════════════════════════ */
 
-  connection.onreconnecting(() => setConnStatus('reconnecting'));
-  connection.onreconnected(() => { setConnStatus('live'); resync(); });
-  connection.onclose(() => { setConnStatus('offline'); scheduleHubStart(connection); });
-
-  startHub(connection);
+/** Choix mémorisés dans le navigateur (facultatif : la page marche sans). */
+function readSavedChoices() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch (e) { return {}; }
 }
 
-// Relance de la connexion (et non des données) quand le hub n'a jamais répondu.
-function startHub(connection) {
-  connection.start()
-    .then(() => { setConnStatus('live'); resync(); })
-    .catch(() => {
-      setConnStatus('offline');
-      // Sans hub, la page affiche quand même l'état de la période (sans mise à jour en direct).
-      if (!mon.environments.length) resync();
-      scheduleHubStart(connection);
-    });
+function saveChoices() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ envs: selectedEnvs, period })); } catch (e) { /* stockage indisponible */ }
 }
 
-function scheduleHubStart(connection) {
-  setTimeout(() => {
-    if (connection.state === signalR.HubConnectionState.Disconnected) startHub(connection);
-  }, MON_HUB_RETRY_MS);
+function onEnvironmentClick() {
+  const code = String($(this).data('env'));
+  if (selectedEnvs.includes(code)) {
+    selectedEnvs = selectedEnvs.filter(c => c !== code);
+  } else {
+    selectedEnvs.push(code);
+  }
+  saveChoices();
+  renderEnvironmentButtons();
+  loadSnapshot();
 }
 
-/** Recharge statuts et snapshot : les événements manqués pendant une coupure sont rattrapés. */
-function resync() {
-  loadEnvironments()
-    .then(loadSnapshot)
-    .catch(error => showMessage('Chargement impossible : ' + error.message));
+function onPeriodClick() {
+  period = String($(this).data('range'));
+  if (period === 'custom') fillCustomRangeIfEmpty();
+  saveChoices();
+  renderPeriodButtons();
+  $('#mode-label').text(isLivePeriod(period) ? 'En direct' : 'Vue figée');
+
+  // La période personnalisée se charge avec le bouton "Appliquer".
+  if (period !== 'custom') loadSnapshot();
 }
 
-// ── Interactions ──
-function bindControls() {
-  $('#env-tabs').on('click', '.mode-tab', function () {
-    const code = String($(this).data('env'));
-    if (mon.selectedEnvs.has(code)) mon.selectedEnvs.delete(code); else mon.selectedEnvs.add(code);
-    savePrefs();
-    renderEnvTabs();
-    loadSnapshot();
-  });
-
-  $('#range-tabs').on('click', '.mode-tab', function () {
-    const preset = String($(this).data('range'));
-    if (preset === 'custom') prefillCustomRange();
-    mon.preset = preset;
-    savePrefs();
-    renderRangeTabs();
-    renderModeLabel();
-    if (preset !== 'custom') loadSnapshot();
-  });
-
-  $('#range-apply').on('click', loadSnapshot);
-  $('#btnHelp').on('click', () => $('#helpOverlay').addClass('open'));
-}
-
-function prefillCustomRange() {
+function fillCustomRangeIfEmpty() {
   if ($('#range-from').val() && $('#range-to').val()) return;
-  const range = computeRange(mon.preset, Date.now());
-  $('#range-from').val(toLocalInputValue(range.from));
-  $('#range-to').val(toLocalInputValue(range.to));
+  const range = periodRange(DEFAULT_PERIOD, Date.now());
+  $('#range-from').val(toInputValue(range.from));
+  $('#range-to').val(toInputValue(range.to));
 }
 
-function toLocalInputValue(ms) {
-  const d = new Date(ms);
-  const pad2 = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+/** Format attendu par <input type="datetime-local"> : 2026-10-28T16:52 */
+function toInputValue(time) {
+  const d = new Date(time);
+  const two = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + two(d.getMonth() + 1) + '-' + two(d.getDate()) + 'T' + two(d.getHours()) + ':' + two(d.getMinutes());
 }
 
 function updateClock() {
   $('#clock').text(new Date().toLocaleTimeString('fr-FR'));
 }
 
-function initMonitoring() {
-  const prefs = readPrefs();
-  // Une période personnalisée n'est pas restaurée : on rouvre toujours en direct.
-  mon.preset = MON_RANGE_PRESETS[prefs.preset] ? prefs.preset : MON_DEFAULT_PRESET;
+function startPage() {
+  // On rouvre toujours en direct : une période personnalisée n'est pas restaurée.
+  const saved = readSavedChoices();
+  period = PERIODS[saved.period] ? saved.period : DEFAULT_PERIOD;
 
-  bindControls();
+  $('#env-tabs').on('click', '.mode-tab', onEnvironmentClick);
+  $('#range-tabs').on('click', '.mode-tab', onPeriodClick);
+  $('#range-apply').on('click', loadSnapshot);
+  $('#btnHelp').on('click', () => $('#helpOverlay').addClass('open'));
   $(window).on('resize', renderChart);
-  renderRangeTabs();
+
+  renderPeriodButtons();
   renderLegend();
   renderAll();
 
   updateClock();
-  setInterval(updateClock, 1000); // horloge locale uniquement, aucune donnée
+  setInterval(updateClock, 1000); // horloge du pied de page uniquement, aucune donnée
 
-  initHub();
+  connectToHub();
 }
 
+// Démarrage dans le navigateur
 if (typeof window !== 'undefined' && window.jQuery) {
-  $(initMonitoring);
+  $(startPage);
 }
 
-if (typeof module !== 'undefined' && module.exports) {
+// Utilisé uniquement par les tests (Node), sans effet dans le navigateur.
+if (typeof module !== 'undefined') {
   module.exports = {
-    createModel,
-    loadSnapshotIntoModel,
+    emptyData,
+    dataFromSnapshot,
     applyJobChanged,
-    addToSeries,
-    taskTimelineEntry,
+    addPointToChart,
     jobTimelineEntry,
-    computeRange,
-    isLivePreset,
+    taskTimelineEntry,
+    periodRange,
+    isLivePeriod,
     chartTicks,
     buildChartSvg,
+    MAX_JOBS,
   };
 }

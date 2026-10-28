@@ -10,8 +10,8 @@ pour être appliquées dans un second temps.
 
 | Emplacement | Contenu |
 |-------------|---------|
-| `FeteadApi.Infrastructure/Services/Monitoring/` | Options, registre des environnements, parseur de notifications, agrégateur, `BackgroundService` LISTEN, repository Dapper, service et fusion du snapshot, découpage temporel. |
-| `FeteadApi.Presentation/Monitoring/` | `MonitoringHub`, `SignalRMonitoringPublisher`, `MonitoringController` (`/monitoring/*`), `MonitoringSetup` (extensions de branchement). |
+| `FeteadApi.Infrastructure/Services/Monitoring/` | `MonitoringOptions`, `MonitoringModels`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService`. |
+| `FeteadApi.Presentation/Monitoring/` | `MonitoringListenerService` (écoute PostgreSQL), `MonitoringHub`, `MonitoringController` (`/monitoring/*`). |
 | `frontend/pages/monitoring/` | `index.html`, `monitoring.css`, `monitoring.js`. |
 | `frontend/index.html` | Portail avec la carte 08 (seul fichier existant modifié, à la demande ; voir § 2.4). |
 | `tests/FeteadApi.Monitoring.Tests/` | Tests xUnit du code Infrastructure. |
@@ -33,7 +33,6 @@ Vérifier la présence de (versions à aligner sur la solution) :
 ```xml
 <PackageReference Include="Dapper" />
 <PackageReference Include="Npgsql" />
-<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
 <PackageReference Include="Microsoft.Extensions.Options" />
 ```
 
@@ -42,17 +41,23 @@ Aucun paquet n'est nécessaire côté Presentation : SignalR serveur fait partie
 ### 2.2 `Program.cs`
 
 ```csharp
+using FeteadApi.Infrastructure.Services.Monitoring;
 using FeteadApi.Presentation.Monitoring;
 
-// avec les autres services
-builder.Services.AddStyxMonitoring(builder.Configuration);
+// Avec les autres services (à côté de LocalDbControlService) :
+builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
+builder.Services.AddSingleton<MonitoringEnvironments>();
+builder.Services.AddSingleton<MonitoringRepository>();
+builder.Services.AddSingleton<MonitoringSnapshotService>();
+builder.Services.AddHostedService<MonitoringListenerService>();
+builder.Services.AddSignalR();
 
-// après app.MapControllers();
-app.MapStyxMonitoring();
+// Après app.MapControllers(); :
+app.MapHub<MonitoringHub>("/monitoringHub");
 ```
 
-⚠️ Tant que `AddStyxMonitoring` n'est pas appelé, `MonitoringController` est quand même découvert
-par `AddControllers()` : un appel à `/monitoring/*` échouerait (dépendances non enregistrées).
+⚠️ Tant que ces lignes ne sont pas ajoutées, `MonitoringController` est quand même découvert
+par `AddControllers()` : un appel à `/monitoring/*` échouerait (services non enregistrés).
 Il n'y a aucun impact sur les autres endpoints.
 
 ### 2.3 `appsettings.json`
@@ -65,9 +70,7 @@ Il n'y a aucun impact sur les autres endpoints.
     { "Code": "INT",   "ConnectionStringVariable": "StyxConnectionInt" }
   ],
   "LatestJobsLimit": 50,
-  "ReconnectDelaySeconds": 5,
-  "MaxRangeDays": 92,
-  "TaskJobCacheSize": 10000
+  "MaxRangeDays": 92
 }
 ```
 
@@ -144,7 +147,7 @@ CREATE INDEX IF NOT EXISTS ix_data_task_external_id ON public.data_task(external
 
 ## 3. Vérifications après intégration
 
-1. Démarrage : log `[Monitoring:LOCAL] LISTEN actif` pour chaque environnement configuré.
+1. Démarrage : log `[Monitoring:LOCAL] Écoute active` pour chaque environnement configuré.
 2. `GET /monitoring/environments` → statuts `Listening`.
 3. `GET /monitoring/snapshot?envs=LOCAL` → KPI, séries, jobs.
 4. Page `/pages/monitoring/` : pastille « En direct », puis un `UPDATE public.data_job SET state = …`

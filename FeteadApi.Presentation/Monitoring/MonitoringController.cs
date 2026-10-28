@@ -1,62 +1,67 @@
 using FeteadApi.Infrastructure.Services.Monitoring;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace FeteadApi.Presentation.Monitoring;
 
-/// <summary>Snapshot REST du module STYX Monitoring (lecture seule).</summary>
+/// <summary>API du module STYX Monitoring (lecture seule).</summary>
 [ApiController]
 [Route("monitoring")]
-public sealed class MonitoringController : ControllerBase
+public class MonitoringController : ControllerBase
 {
-    private static readonly TimeSpan DefaultRange = TimeSpan.FromHours(24);
-
-    private readonly MonitoringEnvironmentRegistry _registry;
+    private readonly MonitoringEnvironments _environments;
     private readonly MonitoringSnapshotService _snapshotService;
-    private readonly TimeProvider _timeProvider;
+    private readonly MonitoringOptions _options;
 
     public MonitoringController(
-        MonitoringEnvironmentRegistry registry,
+        MonitoringEnvironments environments,
         MonitoringSnapshotService snapshotService,
-        TimeProvider timeProvider)
+        IOptions<MonitoringOptions> options)
     {
-        _registry = registry;
+        _environments = environments;
         _snapshotService = snapshotService;
-        _timeProvider = timeProvider;
+        _options = options.Value;
     }
 
-    /// <summary>Environnements configurés et statut de leur connexion LISTEN.</summary>
+    /// <summary>GET /monitoring/environments : environnements configurés et état de leur écoute.</summary>
     [HttpGet("environments")]
-    public ActionResult<IReadOnlyList<EnvironmentStatusChangedEvent>> GetEnvironments() =>
-        Ok(_registry.GetStatuses());
+    public IActionResult GetEnvironments()
+    {
+        return Ok(_environments.GetStatuses());
+    }
 
     /// <summary>
-    /// État sur une plage. Exemple :
     /// GET /monitoring/snapshot?envs=LOCAL,POC&amp;from=2026-10-28T00:00:00Z&amp;to=2026-10-28T12:00:00Z
-    /// Sans plage : les dernières 24 h.
+    /// Sans "from" ni "to" : les dernières 24 heures.
     /// </summary>
     [HttpGet("snapshot")]
-    public async Task<ActionResult<MonitoringSnapshot>> GetSnapshot(
-        [FromQuery] string? envs,
-        [FromQuery] DateTimeOffset? from,
-        [FromQuery] DateTimeOffset? to,
-        CancellationToken ct)
+    public async Task<IActionResult> GetSnapshot(string? envs, DateTimeOffset? from, DateTimeOffset? to)
     {
-        var rangeEnd = to ?? _timeProvider.GetUtcNow();
-        var rangeStart = from ?? rangeEnd - DefaultRange;
-        var codes = ParseCodes(envs);
+        // 1. Période (toujours en UTC, comme en base)
+        var end = to?.UtcDateTime ?? DateTime.UtcNow;
+        var start = from?.UtcDateTime ?? end.AddHours(-24);
 
-        try
+        if (end <= start)
+            return BadRequest(new { message = "La fin de la période doit être après le début." });
+
+        if (end - start > TimeSpan.FromDays(_options.MaxRangeDays))
+            return BadRequest(new { message = $"La période ne peut pas dépasser {_options.MaxRangeDays} jours." });
+
+        // 2. Environnements demandés
+        var selected = new List<MonitoringEnvironment>();
+        var codes = (envs ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        foreach (var code in codes.Distinct(StringComparer.OrdinalIgnoreCase))
         {
-            return Ok(await _snapshotService.GetSnapshotAsync(codes, rangeStart, rangeEnd, ct));
+            var environment = _environments.Find(code);
+            if (environment == null)
+                return BadRequest(new { message = $"Environnement inconnu : {code}" });
+
+            selected.Add(environment);
         }
-        catch (MonitoringRequestException ex)
-        {
-            return BadRequest(new { message = ex.Message });
-        }
+
+        // 3. Données
+        var snapshot = await _snapshotService.GetSnapshotAsync(selected, start, end);
+        return Ok(snapshot);
     }
-
-    private static IReadOnlyCollection<string> ParseCodes(string? envs) =>
-        string.IsNullOrWhiteSpace(envs)
-            ? Array.Empty<string>()
-            : envs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }

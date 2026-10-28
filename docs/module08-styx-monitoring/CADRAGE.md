@@ -58,10 +58,10 @@ ex. `data_task.data_job_id`/`task_state` dans le repo vs `job_id`/`state` en bas
 ```text
 PostgreSQL LOCAL ─┐                              ┌─ REST  /monitoring/*        (snapshot, plage)
 PostgreSQL POC   ─┼─ LISTEN scheduler_events ──► │
-PostgreSQL INT   ─┘        taskflow_events       │  MonitoringBackgroundService (1 connexion LISTEN / env)
+PostgreSQL INT   ─┘        taskflow_events       │  MonitoringListenerService (1 connexion LISTEN / env)
                                                  │        │
                                                  │        ▼
-                                                 │  MonitoringAggregator (résolution tâche → job, mapping)
+                                                 │  (retrouve le job d'une tâche via data_task.external_id)
                                                  │        │
                                                  └─ SignalR /monitoringHub ──► Navigateur (filtre par env)
 ```
@@ -149,34 +149,38 @@ Une variable absente → environnement marqué `Unavailable`, l'API démarre qua
 
 ### 5.2 Composants
 
-Emplacement calqué sur LocalDb : `FeteadApi.Infrastructure.Services.Monitoring`.
+Principe directeur : **lisible par un développeur junior**. On reprend les schémas déjà connus
+de l'équipe (`TaskFlowNotificationListener`, LocalDb), sans interface ni abstraction supplémentaire.
 
-| Composant | Couche | Responsabilité |
-|-----------|--------|----------------|
-| `MonitoringOptions` | Infrastructure | Liaison de la section `Monitoring`. |
-| `MonitoringBackgroundService` | Infrastructure | 1 boucle LISTEN par environnement (`scheduler_events`, `taskflow_events`), reconnexion 5 s (repris de `TaskFlowNotificationListener`), publication du statut d'env. |
-| `MonitoringAggregator` | Infrastructure | Désérialisation, résolution `externalId → job_id` (requête Dapper sur l'env d'origine, cache mémoire borné), production des événements métier. Pur et testable. |
-| `MonitoringRepository` | Infrastructure | Requêtes Dapper du snapshot (§7). |
-| `MonitoringHub` | Presentation | Hub SignalR, diffusion seule (pas de méthode métier). |
-| `MonitoringController` | Presentation | Endpoints REST du snapshot. |
+| Fichier | Couche | Rôle |
+|---------|--------|------|
+| `MonitoringOptions` | Infrastructure | Section `Monitoring` de `appsettings.json`. |
+| `MonitoringModels` | Infrastructure | Classes de données (notification, messages SignalR, snapshot). Aucune logique. |
+| `MonitoringEnvironments` | Infrastructure | Liste des environnements, chaîne de connexion et statut d'écoute. Singleton partagé. |
+| `MonitoringRepository` | Infrastructure | Requêtes Dapper en lecture seule (§7). |
+| `MonitoringSnapshotService` | Infrastructure | Interroge chaque environnement et regroupe les résultats. |
+| `MonitoringListenerService` | Presentation | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
+| `MonitoringHub` | Presentation | Hub SignalR, sans méthode : le navigateur écoute seulement. |
+| `MonitoringController` | Presentation | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
 
 ### 5.3 Câblage `Program.cs`
 
-Tout le branchement est regroupé dans `MonitoringSetup` (Presentation). `Program.cs` n'a besoin
-que de deux lignes, détaillées dans `INTEGRATION.md` :
+Enregistrements écrits en clair, comme pour LocalDb (détail dans `INTEGRATION.md`) :
 
 ```csharp
-builder.Services.AddStyxMonitoring(builder.Configuration);
+builder.Services.Configure<MonitoringOptions>(builder.Configuration.GetSection("Monitoring"));
+builder.Services.AddSingleton<MonitoringEnvironments>();
+builder.Services.AddSingleton<MonitoringRepository>();
+builder.Services.AddSingleton<MonitoringSnapshotService>();
+builder.Services.AddHostedService<MonitoringListenerService>();
+builder.Services.AddSignalR();
 // …
 app.MapControllers();
-app.MapStyxMonitoring();   // MapHub<MonitoringHub>("/monitoringHub")
+app.MapHub<MonitoringHub>("/monitoringHub");
 ```
 
 Le frontend étant servi par l'API, le client utilise une **URL relative** (`/monitoringHub`),
 contrairement à TaskFlow (`API_HOST` codé en dur).
-
-Côté Infrastructure, le hub n'est pas connu : la diffusion passe par le port `IMonitoringPublisher`,
-implémenté par `SignalRMonitoringPublisher` dans Presentation.
 
 ### 5.4 Contrats
 
@@ -285,9 +289,10 @@ dans un trigger BEFORE (nouvelle décision à prendre).
 
 À adapter à l'infrastructure de test existante de `FeteadApi` (non vue à ce stade).
 
-- `MonitoringAggregator` : désérialisation des 3 formes de payload ; mapping `externalId → jobId` ; événement de progression seule vs changement d'état ; payload invalide.
-- Calcul des intervalles du graphique et des bornes de plage.
-- Options : environnement sans variable → `Unavailable` sans exception au démarrage.
+- Lecture des 3 formes de notification (job, tâche Scheduler, tâche TaskFlow).
+- Taille des intervalles du graphique et regroupement des environnements (`MonitoringSnapshotService`).
+- Environnements : variable absente → `Unavailable` sans erreur au démarrage ; code en double refusé.
+- Non testé unitairement : `MonitoringListenerService` et les requêtes SQL (base réelle nécessaire) → vérifications manuelles de `INTEGRATION.md` § 3.
 - Front (manuel) : bascule d'env, mode historique figé, coupure / reprise du hub, absence de requêtes réseau périodiques (onglet Réseau du navigateur).
 
 ---

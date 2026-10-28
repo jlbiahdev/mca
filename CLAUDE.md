@@ -17,6 +17,9 @@ dans la solution FETEAD (non présente ici).
 
 ## Conventions du projet
 
+- **Le code doit être compréhensible par un développeur junior** : simplicité avant SOLID,
+  pas d'interface ni d'abstraction sans besoin réel, reprendre les schémas déjà utilisés dans FETEAD
+  (`TaskFlowNotificationListener`, LocalDb), commentaires en français sur le « pourquoi ».
 - Stack : .NET 8, ASP.NET Core, Dapper, Npgsql, SignalR ; front HTML/CSS/JS + jQuery, sans framework.
 - Design System FETEAD strict : réutiliser les composants de `styles.css` et de TaskFlow
   (`stat-card`, `card`, `table-wrap`, `timeline`, `conn-dot`, `mode-tab`).
