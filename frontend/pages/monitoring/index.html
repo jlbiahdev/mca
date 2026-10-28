@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="fr" data-theme="dark">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FETEAD — STYX Monitoring</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js" integrity="sha256-/JqT3SQfawRcv/BIHPThkBvs0OEvtFFmqPF/lYI/Cxo=" crossorigin="anonymous"></script>
+<link rel="stylesheet" href="/styles.css">
+<!-- Composants TaskFlow réutilisés tels quels (stat-card, card, table, timeline, conn-dot, s-wrap) -->
+<link rel="stylesheet" href="../taskflow/taskflow.css">
+<link rel="stylesheet" href="monitoring.css">
+</head>
+<body class="has-back">
+
+<div class="top-accent"></div>
+
+<!-- ══ HEADER ══════════════════════════════════════════════════════ -->
+<header>
+  <div class="header-main">
+    <a class="logo" href="/">
+      <img class="logo-img" src="data:image/png;base64,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" alt="FETEAD Logo">
+      <div><div class="logo-text">FETEAD</div><div class="logo-sub">Outils &amp; Automatisation</div></div>
+    </a>
+    <div class="header-right">
+      <div id="conn-status">
+        <div class="conn-dot" id="conn-dot"></div>
+        <span id="conn-label">—</span>
+      </div>
+      <div class="hdr-sep"></div>
+      <div class="theme-toggle" onclick="toggleTheme()" title="Changer le thème">
+        <span class="tgl-label" id="lblDark">Dark</span>
+        <div class="tgl-track"><div class="tgl-knob"></div></div>
+        <span class="tgl-label" id="lblLight">Light</span>
+      </div>
+      <div class="hdr-sep"></div>
+      <button class="btn-help" id="btnHelp" title="Aide">?</button>
+      <div class="hdr-sep"></div>
+      <div class="user-badge">
+        <div class="user-avatar">JD</div>
+        <div><div class="user-name">John Doe</div><div class="user-role">ASSU · Production</div></div>
+      </div>
+    </div>
+  </div>
+  <div class="header-back">
+    <a href="/"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>Retour à l'accueil</a>
+  </div>
+</header>
+
+<!-- ══ MAIN ═════════════════════════════════════════════════════════ -->
+<main>
+
+  <div class="page-top">
+    <div>
+      <div class="mod-label">Module 08</div>
+      <div class="mod-title">STYX Monitoring <span class="mod-total" id="mode-label">—</span></div>
+    </div>
+  </div>
+
+  <!-- ── BLOC 1 — PILOTAGE ──────────────────────────────────────── -->
+  <section class="mon-controls">
+    <div class="mon-control">
+      <div class="form-label">Environnements</div>
+      <div class="mode-tabs" id="env-tabs">
+        <span class="mon-hint">Chargement…</span>
+      </div>
+    </div>
+
+    <div class="mon-control">
+      <div class="form-label">Période</div>
+      <div class="mode-tabs" id="range-tabs">
+        <button class="mode-tab" data-range="1h">1 h</button>
+        <button class="mode-tab" data-range="24h">24 h</button>
+        <button class="mode-tab" data-range="7d">7 j</button>
+        <button class="mode-tab" data-range="custom">Personnalisée</button>
+      </div>
+    </div>
+
+    <div class="mon-control mon-custom-range" id="custom-range">
+      <div class="form-label">Du</div>
+      <input class="form-input" type="datetime-local" id="range-from">
+      <div class="form-label">au</div>
+      <input class="form-input" type="datetime-local" id="range-to">
+      <button class="mode-tab" id="range-apply">Appliquer</button>
+    </div>
+  </section>
+
+  <div id="mon-message" class="mon-message"></div>
+
+  <div id="stat-grid">
+    <div class="stat-card" data-state="Submitted">
+      <div class="stat-label">Soumis</div>
+      <div class="stat-value" id="stat-Submitted">—</div>
+    </div>
+    <div class="stat-card" data-state="Running">
+      <div class="stat-label">En cours</div>
+      <div class="stat-value" id="stat-Running">—</div>
+    </div>
+    <div class="stat-card" data-state="Finished">
+      <div class="stat-label">Terminés</div>
+      <div class="stat-value" id="stat-Finished">—</div>
+    </div>
+    <div class="stat-card" data-state="Failed">
+      <div class="stat-label">Échoués</div>
+      <div class="stat-value" id="stat-Failed">—</div>
+    </div>
+    <div class="stat-card" data-state="Canceled">
+      <div class="stat-label">Annulés</div>
+      <div class="stat-value" id="stat-Canceled">—</div>
+    </div>
+  </div>
+
+  <!-- ── BLOC 2 — SUPERVISION ───────────────────────────────────── -->
+  <div class="card mon-card">
+    <div class="card-head">
+      <span>Évolution</span>
+      <span class="mon-legend" id="chart-legend"></span>
+    </div>
+    <div class="mon-chart" id="chart">
+      <div class="empty-row">Chargement…</div>
+    </div>
+  </div>
+
+  <div class="mon-grid">
+    <div class="card">
+      <div class="card-head">
+        <span>DataJobs</span>
+        <span id="jobs-count" style="opacity:.55">0</span>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Env</th><th>ID</th><th>Nom</th><th>État</th>
+              <th>Progression</th><th>Tâches</th><th>Mis à jour</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-tbody">
+            <tr class="loading-row"><td colspan="7">Chargement…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head"><span>Timeline temps réel</span></div>
+      <div class="card-body mon-timeline" id="timeline-body">
+        <div class="empty-row">En attente d'événements…</div>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- HELP OVERLAY -->
+<div class="help-overlay" id="helpOverlay" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="help-card">
+    <div class="help-header">
+      <span class="help-title">Guide d'utilisation — STYX Monitoring</span>
+      <button class="help-close" onclick="document.getElementById('helpOverlay').classList.remove('open')">&times;</button>
+    </div>
+    <div class="help-body">
+      <div class="help-intro">
+        <strong>STYX Monitoring</strong> supervise l'exécution des <strong>DataJobs</strong> et de leurs tâches sur plusieurs environnements à la fois.
+      </div>
+      <div class="help-sep"></div>
+      <div class="help-section">
+        <div class="help-section-title">Pilotage</div>
+        <div class="help-list">
+          <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg><span>Activez ou désactivez chaque <strong>environnement</strong>. La pastille indique l'état de son écoute.</span></div>
+          <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span>Les périodes <strong>1 h, 24 h, 7 j</strong> sont en <strong>direct</strong>. Une période <strong>personnalisée</strong> affiche une vue figée.</span></div>
+        </div>
+      </div>
+      <div class="help-sep"></div>
+      <div class="help-section">
+        <div class="help-section-title">Lecture</div>
+        <div class="help-list">
+          <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Le graphique compte, par intervalle, les jobs <strong>soumis</strong>, <strong>démarrés</strong> et <strong>terminés</strong> selon leur issue.</span></div>
+          <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/><circle cx="12" cy="12" r="10"/></svg><span>La timeline liste les changements d'état des jobs et les <strong>tâches en échec</strong>.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ FOOTER ════════════════════════════════════════════════════════ -->
+<footer>
+  <span>© Groupe Société Générale · ASSU 2026</span>
+  <span id="clock"></span>
+</footer>
+
+<script src="/app.js"></script>
+<script src="monitoring.js"></script>
+</body>
+</html>
