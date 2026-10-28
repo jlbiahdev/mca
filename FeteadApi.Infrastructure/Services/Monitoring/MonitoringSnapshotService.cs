@@ -1,3 +1,5 @@
+using FeteadApi.Domain.Interfaces.Monitoring;
+using FeteadApi.Domain.Models.Monitoring;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -7,26 +9,29 @@ namespace FeteadApi.Infrastructure.Services.Monitoring;
 /// Construit l'état affiché par la page (KPI, graphique, tableau) pour une période
 /// et une liste d'environnements. Un environnement en erreur n'empêche pas les autres.
 /// </summary>
-public class MonitoringSnapshotService
+public class MonitoringSnapshotService : IMonitoringSnapshotService
 {
     /// <summary>États suivis par les KPI et le graphique (spec Module 08).</summary>
     public static readonly string[] TrackedStates = { "Submitted", "Running", "Finished", "Failed", "Canceled" };
 
-    private readonly MonitoringRepository _repository;
+    private readonly MonitoringEnvironments _environments;
+    private readonly IMonitoringRepository _repository;
     private readonly MonitoringOptions _options;
     private readonly ILogger<MonitoringSnapshotService> _logger;
 
     public MonitoringSnapshotService(
-        MonitoringRepository repository,
+        MonitoringEnvironments environments,
+        IMonitoringRepository repository,
         IOptions<MonitoringOptions> options,
         ILogger<MonitoringSnapshotService> logger)
     {
+        _environments = environments;
         _repository = repository;
         _options = options.Value;
         _logger = logger;
     }
 
-    public async Task<MonitoringSnapshot> GetSnapshotAsync(List<MonitoringEnvironment> environments, DateTime from, DateTime to)
+    public async Task<MonitoringSnapshot> GetSnapshotAsync(List<string> environmentCodes, DateTime from, DateTime to)
     {
         // Heure prise AVANT les requêtes : le navigateur rejouera les événements reçus après.
         var generatedAt = DateTime.UtcNow;
@@ -35,11 +40,12 @@ public class MonitoringSnapshotService
         var results = new List<EnvironmentSnapshot>();
         var errors = new List<EnvironmentError>();
 
-        foreach (var environment in environments)
+        foreach (var code in environmentCodes)
         {
-            if (!environment.IsConfigured)
+            var environment = _environments.Find(code);
+            if (environment == null || !environment.IsConfigured)
             {
-                errors.Add(new EnvironmentError { Env = environment.Code, Message = "Environnement indisponible" });
+                errors.Add(new EnvironmentError { Env = code, Message = "Environnement indisponible" });
                 continue;
             }
 

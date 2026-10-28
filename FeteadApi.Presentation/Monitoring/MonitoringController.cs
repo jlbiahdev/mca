@@ -1,3 +1,4 @@
+using FeteadApi.Domain.Interfaces.Monitoring;
 using FeteadApi.Infrastructure.Services.Monitoring;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
@@ -10,12 +11,12 @@ namespace FeteadApi.Presentation.Monitoring;
 public class MonitoringController : ControllerBase
 {
     private readonly MonitoringEnvironments _environments;
-    private readonly MonitoringSnapshotService _snapshotService;
+    private readonly IMonitoringSnapshotService _snapshotService;
     private readonly MonitoringOptions _options;
 
     public MonitoringController(
         MonitoringEnvironments environments,
-        MonitoringSnapshotService snapshotService,
+        IMonitoringSnapshotService snapshotService,
         IOptions<MonitoringOptions> options)
     {
         _environments = environments;
@@ -48,7 +49,7 @@ public class MonitoringController : ControllerBase
             return BadRequest(new { message = $"La période ne peut pas dépasser {_options.MaxRangeDays} jours." });
 
         // 2. Environnements demandés
-        var selected = new List<MonitoringEnvironment>();
+        var selected = new List<string>();
         var codes = (envs ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         foreach (var code in codes.Distinct(StringComparer.OrdinalIgnoreCase))
@@ -57,7 +58,7 @@ public class MonitoringController : ControllerBase
             if (environment == null)
                 return BadRequest(new { message = $"Environnement inconnu : {code}" });
 
-            selected.Add(environment);
+            selected.Add(environment.Code);
         }
 
         // 3. Données

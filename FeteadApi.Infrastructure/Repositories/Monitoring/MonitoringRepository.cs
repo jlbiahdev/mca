@@ -1,13 +1,16 @@
 using Dapper;
+using FeteadApi.Domain.Interfaces.Monitoring;
+using FeteadApi.Domain.Models.Monitoring;
 using Npgsql;
 
-namespace FeteadApi.Infrastructure.Services.Monitoring;
+namespace FeteadApi.Infrastructure.Repositories.Monitoring;
 
 /// <summary>
 /// Requêtes SQL du module, en lecture seule, sur public.data_job et public.data_task.
-/// Chaque méthode reçoit la chaîne de connexion de l'environnement à interroger.
+/// Chaque méthode reçoit la chaîne de connexion de l'environnement à interroger :
+/// SqlConnectionFactory ne peut pas servir ici, elle ne connaît que DefaultConnection.
 /// </summary>
-public class MonitoringRepository
+public class MonitoringRepository : IMonitoringRepository
 {
     // data_job n'a pas de colonne "updated_at" : la date d'activité d'un job
     // est la plus récente des dates connues.

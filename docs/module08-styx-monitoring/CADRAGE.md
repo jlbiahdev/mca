@@ -149,33 +149,48 @@ Une variable absente → environnement marqué `Unavailable`, l'API démarre qua
 
 ### 5.2 Composants
 
-Principe directeur : **lisible par un développeur junior**. On reprend les schémas déjà connus
-de l'équipe (`TaskFlowNotificationListener`, LocalDb), sans interface ni abstraction supplémentaire.
+Principe directeur : **lisible par un développeur junior**, en suivant **les conventions déjà en place
+dans FETEAD** (interface dans `Domain.Interfaces.<Module>`, repository et service dans
+`Infrastructure`, enregistrement dans `DependenciesInjection.Init`).
 
-| Fichier | Couche | Rôle |
-|---------|--------|------|
-| `MonitoringOptions` | Infrastructure | Section `Monitoring` de `appsettings.json`. |
-| `MonitoringModels` | Infrastructure | Classes de données (notification, messages SignalR, snapshot). Aucune logique. |
-| `MonitoringEnvironments` | Infrastructure | Liste des environnements, chaîne de connexion et statut d'écoute. Singleton partagé. |
-| `MonitoringRepository` | Infrastructure | Requêtes Dapper en lecture seule (§7). |
-| `MonitoringSnapshotService` | Infrastructure | Interroge chaque environnement et regroupe les résultats. |
-| `MonitoringListenerService` | Presentation | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
-| `MonitoringHub` | Presentation | Hub SignalR, sans méthode : le navigateur écoute seulement. |
-| `MonitoringController` | Presentation | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
-| `MonitoringDependenciesInjection` | Infrastructure | Injection des services Infrastructure du module. |
-| `MonitoringPresentationInjection` | Presentation | Injection SignalR + service d'écoute, déclaration du hub. |
+| Fichier | Emplacement | Rôle |
+|---------|-------------|------|
+| `IMonitoringRepository`, `IMonitoringSnapshotService` | `Domain.Interfaces.Monitoring` | Interfaces, comme pour DailyApp ou ROS. |
+| `MonitoringModels` | `Domain.Models.Monitoring` | Classes de données (notification, messages SignalR, snapshot). Aucune logique. |
+| `MonitoringRepository` | `Infrastructure.Repositories.Monitoring` | Requêtes Dapper en lecture seule (§7). |
+| `MonitoringOptions` | `Infrastructure.Services.Monitoring` | Section `Monitoring` de `appsettings.json`. |
+| `MonitoringEnvironments` | `Infrastructure.Services.Monitoring` | Liste des environnements, chaîne de connexion et statut d'écoute. |
+| `MonitoringSnapshotService` | `Infrastructure.Services.Monitoring` | Interroge chaque environnement et regroupe les résultats. |
+| `MonitoringListenerService` | `Presentation.Monitoring` | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
+| `MonitoringHub` | `Presentation.Monitoring` | Hub SignalR, sans méthode : le navigateur écoute seulement. |
+| `MonitoringController` | `Presentation.Monitoring` | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
 
 ### 5.3 Injection de dépendances
 
-Deux classes d'injection livrées avec le module, sur le modèle de `DependenciesInjection.Init` :
+Dans `DependenciesInjection.Init`, comme les autres modules :
 
-| Classe | Enregistre | Appelée depuis |
-|--------|-----------|----------------|
-| `MonitoringDependenciesInjection.Init(services, configuration)` | `MonitoringOptions`, `MonitoringEnvironments`, `MonitoringRepository`, `MonitoringSnapshotService` | `DependenciesInjection.Init` (Infrastructure), 1 ligne |
-| `MonitoringPresentationInjection.Init(services)` / `MapEndpoints(app)` | `AddSignalR()`, `MonitoringListenerService`, hub `/monitoringHub` | `Program.cs`, 2 lignes |
+```csharp
+//Monitoring
+services.Configure<MonitoringOptions>(configuration.GetSection("Monitoring"));
+services.AddSingleton<MonitoringEnvironments>();
+services.AddScoped<IMonitoringRepository, MonitoringRepository>();
+services.AddScoped<IMonitoringSnapshotService, MonitoringSnapshotService>();
+```
 
-Tous les services sont des singletons : `MonitoringEnvironments` est partagé entre le service
-d'écoute et l'API (statut de chaque environnement). Détail des lignes à ajouter : `INTEGRATION.md`.
+Dans `Program.cs` (partie Presentation) :
+
+```csharp
+builder.Services.AddSignalR();
+builder.Services.AddHostedService<MonitoringListenerService>();
+// …
+app.MapHub<MonitoringHub>("/monitoringHub");
+```
+
+Deux écarts assumés, commentés dans le code :
+- `MonitoringEnvironments` est un singleton (comme `SqlConnectionFactory`) : le statut d'écoute est partagé.
+- `MonitoringListenerService`, service de fond, crée un scope pour utiliser le repository.
+
+Détail et emplacement exact des lignes : `INTEGRATION.md`.
 
 Le frontend étant servi par l'API, le client utilise une **URL relative** (`/monitoringHub`),
 contrairement à TaskFlow (`API_HOST` codé en dur).
@@ -290,7 +305,7 @@ dans un trigger BEFORE (nouvelle décision à prendre).
 - Lecture des 3 formes de notification (job, tâche Scheduler, tâche TaskFlow).
 - Taille des intervalles du graphique et regroupement des environnements (`MonitoringSnapshotService`).
 - Environnements : variable absente → `Unavailable` sans erreur au démarrage ; code en double refusé.
-- Injection : tous les services Infrastructure se créent, `MonitoringEnvironments` est unique.
+- Snapshot : un environnement en panne ou non configuré est signalé, les autres s'affichent.
 - Non testé unitairement : `MonitoringListenerService` et les requêtes SQL (base réelle nécessaire) → vérifications manuelles de `INTEGRATION.md` § 3.
 - Front (manuel) : bascule d'env, mode historique figé, coupure / reprise du hub, absence de requêtes réseau périodiques (onglet Réseau du navigateur).
 

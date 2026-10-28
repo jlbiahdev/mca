@@ -1,3 +1,4 @@
+using FeteadApi.Domain.Models.Monitoring;
 using FeteadApi.Infrastructure.Services.Monitoring;
 
 namespace FeteadApi.Monitoring.Tests;
