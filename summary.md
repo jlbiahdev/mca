@@ -4,7 +4,7 @@ status: en cours
 ---
 
 ## Attentes
-- Relecture du nouveau code du Module 08 « STYX Monitoring » (backend SignalR, page `/pages/monitoring/`, tests).
+- Relecture de la PR #2 : injection de dépendances et alignement du Module 08 sur les conventions FETEAD (la PR #1 est fusionnée).
 
 ## Blocages
 - Tests .NET non exécutés : SDK .NET indisponible dans l'environnement de Claude. À lancer sur un poste de dev.
