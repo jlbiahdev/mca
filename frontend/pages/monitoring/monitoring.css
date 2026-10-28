@@ -1,0 +1,104 @@
+/* ═══════════════════════════════════════
+   STYX MONITORING — compléments
+   Les composants communs viennent de /styles.css et ../taskflow/taskflow.css.
+   Ce fichier ne contient que ce qui n'existe pas encore.
+═══════════════════════════════════════ */
+
+/* ── Pilotage ── */
+.mon-controls {
+  display:flex;
+  flex-wrap:wrap;
+  align-items:flex-end;
+  gap:18px 28px;
+  margin-bottom:18px;
+  animation:fadeUp .4s ease both;
+}
+.mon-control { display:flex; flex-direction:column; gap:7px; }
+.mon-custom-range { display:none; flex-direction:row; align-items:center; gap:8px; }
+.mon-custom-range.open { display:flex; }
+.mon-custom-range .form-input { width:auto; }
+.mon-hint {
+  font-family:'DM Mono',monospace;
+  font-size:.6rem;
+  color:var(--text-faint);
+  letter-spacing:.08em;
+}
+
+/* Pastille d'état d'écoute dans le bouton d'environnement */
+.mode-tab .conn-dot { width:7px; height:7px; }
+.mode-tab .conn-dot.unavailable { background:var(--gray); }
+
+.mon-message {
+  display:none;
+  font-family:'DM Mono',monospace;
+  font-size:.65rem;
+  letter-spacing:.06em;
+  padding:9px 14px;
+  margin-bottom:14px;
+  border:1px solid rgba(249,115,22,.25);
+  background:rgba(249,115,22,.07);
+  color:var(--orange);
+}
+.mon-message.visible { display:block; }
+
+/* ── Graphique ── */
+.mon-card { margin-bottom:14px; animation:fadeUp .4s .1s ease both; }
+.mon-chart { padding:14px 16px 8px; }
+.mon-chart svg { display:block; width:100%; height:240px; }
+.mon-chart .grid-line { stroke:var(--bg-border); stroke-width:1; }
+.mon-chart .axis-label {
+  fill:var(--text-faint);
+  font-family:'DM Mono',monospace;
+  font-size:10px;
+}
+.mon-chart .series { fill:none; stroke-width:2; stroke-linejoin:round; stroke-linecap:round; }
+.mon-chart .series-Submitted { stroke:var(--yellow); }
+.mon-chart .series-Running   { stroke:var(--cyan); }
+.mon-chart .series-Finished  { stroke:var(--green); }
+.mon-chart .series-Failed    { stroke:var(--orange); }
+.mon-chart .series-Canceled  { stroke:var(--gray); }
+
+.mon-legend { display:flex; flex-wrap:wrap; gap:12px; }
+.mon-legend .s-wrap { font-size:.58rem; }
+
+/* ── Tableau + timeline ── */
+.mon-grid {
+  display:grid;
+  grid-template-columns:minmax(0,2fr) minmax(0,1fr);
+  gap:14px;
+  align-items:start;
+  animation:fadeUp .4s .15s ease both;
+}
+@media(max-width:1100px) { .mon-grid { grid-template-columns:1fr; } }
+
+.td-env {
+  font-family:'DM Mono',monospace;
+  font-size:.6rem;
+  letter-spacing:.1em;
+  color:var(--text-dim);
+  white-space:nowrap;
+}
+.td-name { font-family:'DM Mono',monospace; font-size:.72rem; max-width:240px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.mon-progress { display:flex; align-items:center; gap:8px; min-width:110px; }
+.mon-progress-track { flex:1; height:4px; background:var(--bg-border); }
+.mon-progress-fill  { height:100%; background:var(--cyan); transition:width .3s; }
+.mon-progress-value { font-family:'DM Mono',monospace; font-size:.6rem; color:var(--text-dim); width:34px; text-align:right; }
+
+tbody tr.mon-flash td { background:var(--red-glow); transition:background .6s; }
+
+.mon-timeline { padding:6px 14px; max-height:520px; overflow-y:auto; }
+.mon-tl-row {
+  display:flex;
+  align-items:center;
+  gap:10px;
+  padding:7px 0;
+  border-bottom:1px solid var(--bg-border);
+  font-family:'DM Mono',monospace;
+  font-size:.65rem;
+}
+.mon-tl-row:last-child { border-bottom:none; }
+.mon-tl-time { color:var(--text-faint); white-space:nowrap; }
+.mon-tl-env  { color:var(--text-dim); letter-spacing:.1em; white-space:nowrap; }
+.mon-tl-text { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mon-tl-reason { color:var(--orange); }
