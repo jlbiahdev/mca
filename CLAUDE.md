@@ -4,7 +4,8 @@ Dépôt de livraison du **Module 08 « STYX Monitoring »** de FETEAD, en attent
 dans la solution FETEAD (non présente ici).
 
 Le dossier `tools/` contient de petits outils de poste de développement, indépendants de FETEAD
-(ex. `tools/localdb-autostart` : démarrage automatique de PostgreSQL local).
+(`tools/localdb-autostart` : démarrage automatique de PostgreSQL local ;
+`tools/fetead-autostart` : démarrage automatique de FETEAD).
 
 ## Règles de travail
 

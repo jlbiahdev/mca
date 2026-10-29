@@ -4,8 +4,7 @@ status: en cours
 ---
 
 ## Attentes
-- Relecture de la PR #4 : script de démarrage automatique de PostgreSQL local à l'ouverture de session (`tools/localdb-autostart`).
-- Reporter dans `sgdesign` les évolutions validées du Module 08 (détail d'un job, filtres ID / Nom).
+- Relecture de la PR #5 : démarrage automatique de FETEAD à l'ouverture de session (`tools/fetead-autostart`).
 
 ## Blocages
 - Aucun
