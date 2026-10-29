@@ -12,7 +12,7 @@ public class MonitoringSnapshotServiceErrorTests
     /// <summary>Faux repository : répond pour "Host=ok", plante pour toute autre chaîne.</summary>
     private class FakeRepository : IMonitoringRepository
     {
-        public Task<EnvironmentSnapshot> GetSnapshotAsync(string connectionString, DateTime from, DateTime to, int bucketSeconds, int jobsLimit)
+        public Task<EnvironmentSnapshot> GetSnapshotAsync(string connectionString, DateTime from, DateTime to, int bucketSeconds, int jobsLimit, JobFilter filter)
         {
             if (connectionString != "Host=ok")
                 throw new InvalidOperationException("base injoignable");
@@ -23,6 +23,11 @@ public class MonitoringSnapshotServiceErrorTests
                 Jobs = { new JobRow { Id = 1, State = "Running", UpdatedAt = from } }
             };
             return Task.FromResult(snapshot);
+        }
+
+        public Task<List<TaskRow>> GetJobTasksAsync(string connectionString, long jobId, int limit)
+        {
+            return Task.FromResult(new List<TaskRow> { new TaskRow { TaskNumber = 1, CommandLine = "run.exe --job " + jobId } });
         }
 
         public Task<long?> FindJobIdByExternalIdAsync(string connectionString, long externalId)
@@ -59,10 +64,28 @@ public class MonitoringSnapshotServiceErrorTests
         var service = CreateService();
         var from = new DateTime(2026, 10, 28, 10, 0, 0, DateTimeKind.Utc);
 
-        var snapshot = await service.GetSnapshotAsync(new List<string> { "LOCAL", "POC", "INT" }, from, from.AddHours(1));
+        var snapshot = await service.GetSnapshotAsync(new List<string> { "LOCAL", "POC", "INT" }, from, from.AddHours(1), new JobFilter());
 
         Assert.Equal(4, snapshot.Kpi["Running"]);
         Assert.Equal("LOCAL", Assert.Single(snapshot.Jobs).Env);
         Assert.Equal(new[] { "POC", "INT" }, snapshot.Errors.Select(e => e.Env));
+    }
+
+    [Fact]
+    public async Task Tasks_of_a_job_are_read_on_its_environment()
+    {
+        var service = CreateService();
+
+        var tasks = await service.GetJobTasksAsync("LOCAL", 1024);
+
+        Assert.Equal("run.exe --job 1024", Assert.Single(tasks).CommandLine);
+    }
+
+    [Fact]
+    public async Task Tasks_of_an_unconfigured_environment_are_refused()
+    {
+        var service = CreateService();
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.GetJobTasksAsync("INT", 1));
     }
 }

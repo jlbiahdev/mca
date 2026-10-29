@@ -89,6 +89,46 @@ public class StateSeries
     public int[] Counts { get; set; } = Array.Empty<int>();
 }
 
+/// <summary>
+/// Filtres du tableau DataJobs. Ils ne s'appliquent QU'AU tableau :
+/// les KPI et le graphique restent calculés sur toute la période.
+/// </summary>
+public class JobFilter
+{
+    /// <summary>Identifiant exact du job (null = pas de filtre).</summary>
+    public long? JobId { get; set; }
+
+    /// <summary>Morceau du nom, sans tenir compte des majuscules (null = pas de filtre).</summary>
+    public string? Name { get; set; }
+}
+
+/// <summary>Une tâche d'un job (table public.data_task), affichée dans le détail du job.</summary>
+public class TaskRow
+{
+    public long Id { get; set; }
+
+    /// <summary>Numéro de la tâche dans le job (data_task.task_id).</summary>
+    public int TaskNumber { get; set; }
+
+    /// <summary>Lien avec taskflow.task / scheduler.task : sert à mettre l'état à jour en direct.</summary>
+    public long? ExternalId { get; set; }
+
+    public string? Name { get; set; }
+    public string State { get; set; } = "";
+
+    /// <summary>Commande complète exécutée.</summary>
+    public string CommandLine { get; set; } = "";
+    public string CommandExe { get; set; } = "";
+    public string CommandArgs { get; set; } = "";
+
+    /// <summary>Sortie de la commande (1000 caractères maximum en base).</summary>
+    public string? Output { get; set; }
+
+    // data_task stocke des dates SANS fuseau horaire (TIMESTAMP) : on les renvoie telles quelles.
+    public DateTime? StartDateTime { get; set; }
+    public DateTime? EndDateTime { get; set; }
+}
+
 /// <summary>Une ligne du tableau DataJobs.</summary>
 public class JobRow
 {
