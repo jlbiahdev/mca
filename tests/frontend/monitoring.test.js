@@ -117,3 +117,50 @@ test('le graphique contient une courbe par état', () => {
     assert.match(svg, new RegExp('series-' + state));
   });
 });
+
+// ── Filtres du tableau ───────────────────────────────────────────────────
+
+test('filtre ID : égalité exacte', () => {
+  assert.equal(page.matchesFilters({ id: 1024, name: 'ALM_RUN' }, { id: 1024, name: '' }), true);
+  assert.equal(page.matchesFilters({ id: 10245, name: 'ALM_RUN' }, { id: 1024, name: '' }), false);
+});
+
+test('filtre nom : contient le texte, sans tenir compte des majuscules', () => {
+  assert.equal(page.matchesFilters({ id: 1, name: 'ALM_RUN_202610' }, { id: null, name: 'run' }), true);
+  assert.equal(page.matchesFilters({ id: 1, name: 'ORSA_RUN' }, { id: null, name: 'alm' }), false);
+  assert.equal(page.matchesFilters({ id: 1, name: null }, { id: null, name: 'alm' }), false);
+});
+
+test('sans filtre, tous les jobs passent', () => {
+  assert.equal(page.matchesFilters({ id: 1, name: null }, { id: null, name: '' }), true);
+});
+
+test('un nouveau job hors filtre compte dans les KPI mais n\'entre pas dans le tableau', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  const filters = { id: null, name: 'ALM' };
+  page.applyJobChanged(data, jobMessage({ jobId: 2000, name: 'ORSA_RUN', state: 'Submitted', previousState: null }), filters);
+  assert.equal(data.kpi.Submitted, 2);
+  assert.equal(data.jobs.some(j => j.id === 2000), false);
+});
+
+test('un job déjà affiché reste mis à jour même avec un filtre', () => {
+  const data = page.dataFromSnapshot(sampleSnapshot());
+  page.applyJobChanged(data, jobMessage({ progress: 80, state: 'Running', previousState: 'Running' }), { id: 1024, name: '' });
+  assert.equal(data.jobs[0].progress, 80);
+});
+
+// ── Détail d'un job ──────────────────────────────────────────────────────
+
+test('l\'état d\'une tâche du détail est mis à jour par son external_id', () => {
+  const tasks = [{ externalId: 77, state: 'Running' }, { externalId: 78, state: 'Running' }];
+  assert.equal(page.applyTaskChanged(tasks, { externalId: 78, state: 'Failed' }), true);
+  assert.equal(tasks[1].state, 'Failed');
+  assert.equal(tasks[0].state, 'Running');
+});
+
+test('une tâche inconnue ou sans external_id ne change rien', () => {
+  const tasks = [{ externalId: 77, state: 'Running' }];
+  assert.equal(page.applyTaskChanged(tasks, { externalId: 99, state: 'Failed' }), false);
+  assert.equal(page.applyTaskChanged(tasks, { externalId: null, state: 'Failed' }), false);
+  assert.equal(tasks[0].state, 'Running');
+});

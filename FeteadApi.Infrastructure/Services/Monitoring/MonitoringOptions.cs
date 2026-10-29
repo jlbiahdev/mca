@@ -14,6 +14,9 @@ public class MonitoringOptions
 
     /// <summary>Plage maximale d'un snapshot, pour ne pas surcharger les bases.</summary>
     public int MaxRangeDays { get; set; } = 92;
+
+    /// <summary>Nombre maximal de tâches affichées dans le détail d'un job.</summary>
+    public int TaskListLimit { get; set; } = 1000;
 }
 
 public class MonitoringEnvironmentOptions

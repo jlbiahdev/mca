@@ -31,7 +31,7 @@ public class MonitoringSnapshotService : IMonitoringSnapshotService
         _logger = logger;
     }
 
-    public async Task<MonitoringSnapshot> GetSnapshotAsync(List<string> environmentCodes, DateTime from, DateTime to)
+    public async Task<MonitoringSnapshot> GetSnapshotAsync(List<string> environmentCodes, DateTime from, DateTime to, JobFilter filter)
     {
         // Heure prise AVANT les requêtes : le navigateur rejouera les événements reçus après.
         var generatedAt = DateTime.UtcNow;
@@ -52,7 +52,7 @@ public class MonitoringSnapshotService : IMonitoringSnapshotService
             try
             {
                 var result = await _repository.GetSnapshotAsync(
-                    environment.ConnectionString!, from, to, bucketSeconds, _options.LatestJobsLimit);
+                    environment.ConnectionString!, from, to, bucketSeconds, _options.LatestJobsLimit, filter);
 
                 // Chaque ligne de job doit savoir de quel environnement elle vient.
                 foreach (var job in result.Jobs)
@@ -72,6 +72,15 @@ public class MonitoringSnapshotService : IMonitoringSnapshotService
         snapshot.GeneratedAt = generatedAt;
         snapshot.Errors = errors;
         return snapshot;
+    }
+
+    public async Task<List<TaskRow>> GetJobTasksAsync(string environmentCode, long jobId)
+    {
+        var environment = _environments.Find(environmentCode);
+        if (environment == null || !environment.IsConfigured)
+            throw new InvalidOperationException($"Environnement {environmentCode} indisponible.");
+
+        return await _repository.GetJobTasksAsync(environment.ConnectionString!, jobId, _options.TaskListLimit);
     }
 
     /// <summary>

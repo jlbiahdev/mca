@@ -163,7 +163,7 @@ dans FETEAD** (interface dans `Domain.Interfaces.<Module>`, repository et servic
 | `MonitoringSnapshotService` | `Infrastructure.Services.Monitoring` | Interroge chaque environnement et regroupe les résultats. |
 | `MonitoringListenerService` | `Presentation.Monitoring` | 1 boucle LISTEN par environnement, reconnexion après 5 s, envoi SignalR. Même schéma que `TaskFlowNotificationListener`. |
 | `MonitoringHub` | `Presentation.Monitoring` | Hub SignalR, sans méthode : le navigateur écoute seulement. |
-| `MonitoringController` | `Presentation.Monitoring` | `GET /monitoring/environments` et `GET /monitoring/snapshot`. |
+| `MonitoringController` | `Presentation.Monitoring` | `GET /monitoring/environments`, `GET /monitoring/snapshot` et `GET /monitoring/jobs/{env}/{id}/tasks`. |
 
 ### 5.3 Injection de dépendances
 
@@ -201,8 +201,9 @@ REST :
 
 | Endpoint | Rôle |
 |----------|------|
-| `GET /monitoring/environments` | `[{ code, status }]` — `Listening`, `Reconnecting`, `Unavailable`. |
-| `GET /monitoring/snapshot?envs=LOCAL,POC&from=…&to=…&bucket=…` | `{ generatedAt, kpi, series, jobs }` sur la plage (§7). |
+| `GET /monitoring/environments` | `[{ env, status, since }]` — `Listening`, `Reconnecting`, `Unavailable`. |
+| `GET /monitoring/snapshot?envs=LOCAL,POC&from=…&to=…[&jobId=…][&name=…]` | `{ generatedAt, kpi, series, jobs, errors }` sur la plage (§7). `jobId` et `name` filtrent **le tableau uniquement**. |
+| `GET /monitoring/jobs/{env}/{jobId}/tasks` | `{ tasks, limit }` : tâches du job (numéro, nom, état, commande exécutée, sortie, début, fin), 1000 au plus. |
 
 SignalR (serveur → client) :
 
@@ -239,8 +240,21 @@ dans le portail. Structure de page identique à TaskFlow (`header`, `page-top`, 
 | Élément | Rendu |
 |---------|-------|
 | Graphique d'évolution | `card` contenant un `<svg>` généré en JS : 5 séries (couleurs `--yellow/--cyan/--green/--orange/--gray`, déjà associées aux états), axe temps, légende en `stat-label`. |
-| Tableau DataJobs | `card` + `table-wrap` : `ENV · ID · NAME · STATE (sdot) · PROGRESS · TASKS · UPDATED`. |
+| Tableau DataJobs | `card` + `table-wrap` : `ENV · ID · NAME · STATE (sdot) · PROGRESS · TASKS · UPDATED`. Ligne de filtres sous l'en-tête : **ID** (égalité exacte) et **Nom** (contient, sans tenir compte des majuscules : `ILIKE '%…%'`), appliqués à la validation du champ. Clic sur une ligne → détail du job. |
 | Timeline temps réel | Composant `timeline` de TaskFlow ; entrées `HH:mm:ss [ENV] Job 1024 Running`, **plafonnée** (ex. 200 entrées). |
+
+### Détail d'un job (clic sur une ligne)
+
+Vue séparée dans la même page (`.view`, comme le détail de tâche de TaskFlow), avec bouton « Retour à la liste ».
+
+| Élément | Rendu |
+|---------|-------|
+| En-tête | `page-top` : environnement et `#id` du job. |
+| Champs | `detail-grid` / `detail-field` de TaskFlow : nom, état, progression, mise à jour. |
+| Tâches | `card` + `table-wrap` : `# · NOM · ÉTAT · COMMANDE EXÉCUTÉE · DÉBUT · FIN`. La commande est `data_task.command_line` ; la sortie (`output`) s'affiche dessous quand elle existe. |
+| Temps réel | `JobChanged` du job → en-tête ; `TaskChanged` du job → état de la tâche retrouvée par `external_id`. Le détail suit son job quels que soient la période et les filtres. |
+
+Les dates de `data_task` sont stockées sans fuseau (`TIMESTAMP`) : elles sont affichées telles quelles.
 
 ### Modes
 
@@ -262,6 +276,7 @@ Notation : `activité(job) = COALESCE(change_date_time, start_date_time, submit_
 | **KPI** | `COUNT(*) GROUP BY data_job.state` sur le périmètre, pour les 5 états suivis (référence = `data_job.state`, conforme spec). |
 | **Nombre de tâches** | `COUNT(data_task.id)` par `data_task.job_id` (conforme spec). |
 | **Progression** | `data_job.progress` (conforme spec). |
+| **Filtres du tableau** | `j.id = @JobId` et `j.name ILIKE '%…%'` (les `%`, `_` et `\` saisis sont pris à la lettre). Les KPI et le graphique ne sont **pas** filtrés. En direct, un nouveau job n'entre dans le tableau que s'il passe les filtres. |
 | **UPDATED** | `activité(job)`. |
 | **Graphique (D6)** | **Flux par intervalle**, pas un stock : *Submitted* = jobs dont `submit_date_time` tombe dans l'intervalle ; *Running* = `start_date_time` ; *Finished / Failed / Canceled* = `change_date_time` des jobs actuellement dans cet état. |
 | **Intervalle du graphique** | Selon la longueur de la période : ≤ 1 h → 1 min · ≤ 6 h → 5 min · ≤ 24 h → 30 min · ≤ 7 j → 3 h · au-delà → 50 intervalles arrondis à l'heure. |

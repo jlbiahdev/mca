@@ -50,6 +50,9 @@
 <!-- ══ MAIN ═════════════════════════════════════════════════════════ -->
 <main>
 
+<!-- ══ VUE LISTE ══════════════════════════════════════════════════ -->
+<div id="view-list" class="view active">
+
   <div class="page-top">
     <div>
       <div class="mod-label">Module 08</div>
@@ -134,6 +137,13 @@
               <th>Env</th><th>ID</th><th>Nom</th><th>État</th>
               <th>Progression</th><th>Tâches</th><th>Mis à jour</th>
             </tr>
+            <!-- Filtres : appliqués quand on valide (Entrée) ou qu'on quitte le champ -->
+            <tr class="mon-filter-row">
+              <th></th>
+              <th><input class="form-input mon-filter" id="filter-id" type="number" min="1" placeholder="ID"></th>
+              <th><input class="form-input mon-filter" id="filter-name" type="text" maxlength="100" placeholder="Nom contient…"></th>
+              <th colspan="4"></th>
+            </tr>
           </thead>
           <tbody id="jobs-tbody">
             <tr class="loading-row"><td colspan="7">Chargement…</td></tr>
@@ -149,6 +159,61 @@
       </div>
     </div>
   </div>
+
+</div>
+
+<!-- ══ VUE DÉTAIL D'UN JOB ═══════════════════════════════════════ -->
+<div id="view-detail" class="view">
+
+  <div class="page-top">
+    <div>
+      <div class="mod-label">Détail job · <span id="detail-env">—</span></div>
+      <div class="mod-title" id="detail-title">#—</div>
+    </div>
+    <div class="mode-tabs">
+      <button class="mode-tab" id="btn-back">← Retour à la liste</button>
+    </div>
+  </div>
+
+  <div class="detail-grid">
+    <div class="detail-field">
+      <div class="detail-field-label">Nom</div>
+      <div class="detail-field-value" id="detail-name">—</div>
+    </div>
+    <div class="detail-field">
+      <div class="detail-field-label">État</div>
+      <div class="detail-field-value" id="detail-state">—</div>
+    </div>
+    <div class="detail-field">
+      <div class="detail-field-label">Progression</div>
+      <div class="detail-field-value" id="detail-progress">—</div>
+    </div>
+    <div class="detail-field">
+      <div class="detail-field-label">Mis à jour</div>
+      <div class="detail-field-value" id="detail-updated">—</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-head">
+      <span>Tâches</span>
+      <span id="detail-tasks-count" style="opacity:.55">0</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th><th>Nom</th><th>État</th><th>Commande exécutée</th><th>Début</th><th>Fin</th>
+          </tr>
+        </thead>
+        <tbody id="tasks-tbody">
+          <tr class="loading-row"><td colspan="6">Chargement…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
 
 </main>
 
@@ -176,6 +241,7 @@
         <div class="help-section-title">Lecture</div>
         <div class="help-list">
           <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span>Le graphique compte, par intervalle, les jobs <strong>soumis</strong>, <strong>démarrés</strong> et <strong>terminés</strong> selon leur issue.</span></div>
+          <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><span>Filtrez le tableau par <strong>ID</strong> exact ou par <strong>morceau du nom</strong>, puis cliquez sur un job pour voir ses <strong>tâches</strong> et les <strong>commandes exécutées</strong>.</span></div>
           <div class="help-item"><svg class="help-item-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/><circle cx="12" cy="12" r="10"/></svg><span>La timeline liste les changements d'état des jobs et les <strong>tâches en échec</strong>.</span></div>
         </div>
       </div>

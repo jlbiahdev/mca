@@ -53,7 +53,10 @@ public class MonitoringRepository : IMonitoringRepository
         ) e
         GROUP BY e.state, BucketIndex";
 
-    /// <summary>Derniers jobs modifiés, avec leur nombre de tâches.</summary>
+    /// <summary>
+    /// Derniers jobs modifiés, avec leur nombre de tâches.
+    /// {0} est remplacé par les filtres du tableau (voir BuildJobFilterSql).
+    /// </summary>
     private const string LatestJobsSql = $@"
         SELECT j.id AS Id,
                j.name AS Name,
@@ -63,7 +66,26 @@ public class MonitoringRepository : IMonitoringRepository
                (SELECT COUNT(*) FROM public.data_task t WHERE t.job_id = j.id) AS TaskCount
         FROM public.data_job j
         WHERE {ActivityDate} BETWEEN @From AND @To
+        {{0}}
         ORDER BY UpdatedAt DESC, j.id DESC
+        LIMIT @Limit";
+
+    /// <summary>Tâches d'un job, avec les commandes exécutées.</summary>
+    private const string JobTasksSql = @"
+        SELECT t.id AS Id,
+               t.task_id AS TaskNumber,
+               t.external_id AS ExternalId,
+               t.name AS Name,
+               t.state AS State,
+               t.command_line AS CommandLine,
+               t.command_exe AS CommandExe,
+               t.command_args AS CommandArgs,
+               t.output AS Output,
+               t.start_date_time AS StartDateTime,
+               t.end_date_time AS EndDateTime
+        FROM public.data_task t
+        WHERE t.job_id = @JobId
+        ORDER BY t.task_id, t.id
         LIMIT @Limit";
 
     /// <summary>
@@ -78,15 +100,19 @@ public class MonitoringRepository : IMonitoringRepository
         LIMIT 1";
 
     public async Task<EnvironmentSnapshot> GetSnapshotAsync(
-        string connectionString, DateTime from, DateTime to, int bucketSeconds, int jobsLimit)
+        string connectionString, DateTime from, DateTime to, int bucketSeconds, int jobsLimit, JobFilter filter)
     {
         var parameters = new
         {
             From = from,
             To = to,
             BucketSeconds = (double)bucketSeconds,
-            Limit = jobsLimit
+            Limit = jobsLimit,
+            JobId = filter.JobId,
+            NamePattern = filter.Name == null ? null : ToLikePattern(filter.Name)
         };
+
+        var jobsSql = string.Format(LatestJobsSql, BuildJobFilterSql(filter));
 
         await using var connection = new NpgsqlConnection(connectionString);
         await connection.OpenAsync();
@@ -95,10 +121,50 @@ public class MonitoringRepository : IMonitoringRepository
         {
             StateCounts = (await connection.QueryAsync<StateCount>(StateCountsSql, parameters)).ToList(),
             Buckets = (await connection.QueryAsync<BucketCount>(BucketsSql, parameters)).ToList(),
-            Jobs = (await connection.QueryAsync<JobRow>(LatestJobsSql, parameters)).ToList()
+            Jobs = (await connection.QueryAsync<JobRow>(jobsSql, parameters)).ToList()
         };
 
         return snapshot;
+    }
+
+    public async Task<List<TaskRow>> GetJobTasksAsync(string connectionString, long jobId, int limit)
+    {
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+
+        var tasks = await connection.QueryAsync<TaskRow>(JobTasksSql, new { JobId = jobId, Limit = limit });
+        return tasks.ToList();
+    }
+
+    /// <summary>
+    /// Conditions SQL ajoutées seulement si le filtre est rempli.
+    /// Les valeurs passent toujours par des paramètres (@JobId, @NamePattern), jamais dans le texte SQL.
+    /// </summary>
+    public static string BuildJobFilterSql(JobFilter filter)
+    {
+        var sql = "";
+
+        if (filter.JobId != null)
+            sql += " AND j.id = @JobId";
+
+        if (filter.Name != null)
+            sql += " AND j.name ILIKE @NamePattern"; // ILIKE = LIKE sans tenir compte des majuscules
+
+        return sql;
+    }
+
+    /// <summary>
+    /// Transforme "ALM_RUN" en "%ALM\_RUN%" : le nom peut se trouver n'importe où,
+    /// et les caractères spéciaux du LIKE (%, _ et \) tapés par l'utilisateur sont pris à la lettre.
+    /// </summary>
+    public static string ToLikePattern(string text)
+    {
+        var escaped = text
+            .Replace("\\", "\\\\")
+            .Replace("%", "\\%")
+            .Replace("_", "\\_");
+
+        return "%" + escaped + "%";
     }
 
     public async Task<long?> FindJobIdByExternalIdAsync(string connectionString, long externalId)

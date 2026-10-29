@@ -96,6 +96,7 @@ enregistrés). Il n'y a aucun impact sur les autres endpoints.
     { "Code": "INT",   "ConnectionStringVariable": "StyxConnectionInt" }
   ],
   "LatestJobsLimit": 50,
+  "TaskListLimit": 1000,
   "MaxRangeDays": 92
 }
 ```
@@ -176,6 +177,8 @@ CREATE INDEX IF NOT EXISTS ix_data_task_external_id ON public.data_task(external
 1. Démarrage : log `[Monitoring:LOCAL] Écoute active` pour chaque environnement configuré.
 2. `GET /monitoring/environments` → statuts `Listening`.
 3. `GET /monitoring/snapshot?envs=LOCAL` → KPI, séries, jobs.
+   `GET /monitoring/snapshot?envs=LOCAL&name=alm` → seul le tableau est filtré.
+   `GET /monitoring/jobs/LOCAL/<id>/tasks` → tâches et commandes du job.
 4. Page `/pages/monitoring/` : pastille « En direct », puis un `UPDATE public.data_job SET state = …`
    sur un job de test doit apparaître dans la timeline sans rechargement.
 5. Onglet Réseau du navigateur : aucune requête périodique vers `/monitoring/*`.

@@ -6,6 +6,8 @@
    2. Ensuite, le serveur nous envoie chaque changement via SignalR.
    3. On recharge le snapshot seulement quand l'utilisateur change un filtre
       ou après une coupure. Jamais de rechargement automatique toutes les X secondes.
+   4. Un clic sur un job ouvre son détail : la liste de ses tâches et les commandes
+      exécutées. L'état des tâches se met à jour en direct.
 ═══════════════════════════════════════════════════════════════════════ */
 
 // ── Configuration ────────────────────────────────────────────────────────
@@ -34,6 +36,11 @@ let environments = [];           // [{ env: 'LOCAL', status: 'Listening' }, …]
 let selectedEnvs = [];           // codes cochés, ex. ['LOCAL', 'POC']
 let period = DEFAULT_PERIOD;     // '1h', '24h', '7d' ou 'custom'
 let timeline = [];               // derniers événements, le plus récent en premier
+let filters = { id: null, name: '' };  // filtres du tableau DataJobs
+
+let detailJob = null;            // job ouvert dans le détail : { env, id, name, state, … }
+let detailTasks = [];            // ses tâches
+let lastTasksRequestNumber = 0;  // pour ignorer une liste de tâches arrivée trop tard
 
 let isLoading = false;           // un snapshot est en cours de chargement
 let eventsDuringLoading = [];    // événements reçus pendant ce chargement
@@ -77,10 +84,26 @@ function dataFromSnapshot(snapshot) {
 }
 
 /**
+ * Le job correspond-il aux filtres du tableau ?
+ * ID : égalité exacte. Nom : contient le texte, sans tenir compte des majuscules (comme ILIKE).
+ */
+function matchesFilters(job, jobFilters) {
+  if (jobFilters.id !== null && jobFilters.id !== undefined && job.id !== jobFilters.id) return false;
+
+  if (jobFilters.name) {
+    if (!job.name) return false; // nom inconnu : on ne peut pas savoir, on n'affiche pas
+    if (!job.name.toLowerCase().includes(jobFilters.name.toLowerCase())) return false;
+  }
+  return true;
+}
+
+/**
  * Applique un message "JobChanged" aux données.
  * Renvoie true si l'état du job a changé (et pas seulement sa progression).
+ * Les KPI et le graphique comptent tous les jobs ; le tableau, seulement ceux qui passent les filtres.
  */
-function applyJobChanged(pageData, message) {
+function applyJobChanged(pageData, message, jobFilters) {
+  jobFilters = jobFilters || { id: null, name: '' };
   let job = pageData.jobs.find(j => j.env === message.env && j.id === message.jobId);
 
   // Si le job est déjà dans le tableau, son état affiché fait foi :
@@ -95,6 +118,8 @@ function applyJobChanged(pageData, message) {
   }
 
   if (!job) {
+    // Nouveau job : on ne l'ajoute au tableau que s'il passe les filtres.
+    if (!matchesFilters({ id: message.jobId, name: message.name }, jobFilters)) return stateChanged;
     job = { env: message.env, id: message.jobId, name: null, state: message.state, progress: 0, taskCount: null };
   }
   if (message.name) job.name = message.name;
@@ -121,6 +146,20 @@ function addPointToChart(pageData, state, time) {
   });
 
   pageData.series[state][index]++;
+}
+
+/**
+ * Met à jour l'état d'une tâche du détail, retrouvée par son external_id.
+ * Renvoie true si une tâche a été modifiée.
+ */
+function applyTaskChanged(tasks, message) {
+  if (message.externalId === null || message.externalId === undefined) return false;
+
+  const task = tasks.find(t => t.externalId === message.externalId);
+  if (!task) return false;
+
+  task.state = message.state;
+  return true;
 }
 
 /** Ligne de timeline pour un job. */
@@ -251,7 +290,8 @@ async function loadSnapshot() {
 
   const query = '?envs=' + encodeURIComponent(selectedEnvs.join(','))
     + '&from=' + encodeURIComponent(new Date(range.from).toISOString())
-    + '&to=' + encodeURIComponent(new Date(range.to).toISOString());
+    + '&to=' + encodeURIComponent(new Date(range.to).toISOString())
+    + filtersQuery();
 
   try {
     const snapshot = await callApi('/snapshot' + query);
@@ -265,6 +305,34 @@ async function loadSnapshot() {
     if (requestNumber === lastRequestNumber) showMessage('Chargement impossible : ' + error.message);
   } finally {
     if (requestNumber === lastRequestNumber) isLoading = false;
+  }
+}
+
+/** Filtres du tableau, sous forme de paramètres d'URL (vide si aucun filtre). */
+function filtersQuery() {
+  let query = '';
+  if (filters.id !== null) query += '&jobId=' + filters.id;
+  if (filters.name) query += '&name=' + encodeURIComponent(filters.name);
+  return query;
+}
+
+/** Tâches du job ouvert dans le détail. */
+async function loadJobTasks() {
+  lastTasksRequestNumber++;
+  const requestNumber = lastTasksRequestNumber;
+  const job = detailJob;
+
+  $('#tasks-tbody').html('<tr class="loading-row"><td colspan="6">Chargement…</td></tr>');
+
+  try {
+    const result = await callApi('/jobs/' + encodeURIComponent(job.env) + '/' + job.id + '/tasks');
+    if (requestNumber !== lastTasksRequestNumber) return; // l'utilisateur a ouvert un autre job
+
+    detailTasks = result.tasks;
+    renderTasks(result.limit);
+  } catch (error) {
+    if (requestNumber !== lastTasksRequestNumber) return;
+    $('#tasks-tbody').html(`<tr class="loading-row"><td colspan="6">Chargement impossible : ${escapeHtml(error.message)}</td></tr>`);
   }
 }
 
@@ -297,6 +365,8 @@ function reloadEverything() {
   loadEnvironments()
     .then(loadSnapshot)
     .catch(error => showMessage('Chargement impossible : ' + error.message));
+
+  if (detailJob) loadJobTasks();
 }
 
 
@@ -309,7 +379,7 @@ function isDisplayed(message) {
 }
 
 function handleJobChanged(message) {
-  const stateChanged = applyJobChanged(data, message);
+  const stateChanged = applyJobChanged(data, message, filters);
   if (stateChanged) addToTimeline(jobTimelineEntry(message));
 }
 
@@ -318,7 +388,21 @@ function handleTaskChanged(message) {
   if (entry) addToTimeline(entry);
 }
 
+/** Le message concerne-t-il le job ouvert dans le détail ? */
+function isDetailJob(message) {
+  return detailJob !== null && message.env === detailJob.env && message.jobId === detailJob.id;
+}
+
 function onJobChanged(message) {
+  // Le détail suit son job en direct, quels que soient la période et les filtres.
+  if (isDetailJob(message)) {
+    detailJob.state = message.state;
+    if (message.name) detailJob.name = message.name;
+    if (message.progress !== null && message.progress !== undefined) detailJob.progress = message.progress;
+    detailJob.updatedAt = message.receivedAt;
+    renderDetailHeader();
+  }
+
   if (!isDisplayed(message)) return;
   if (isLoading) { eventsDuringLoading.push({ type: 'job', message }); return; }
 
@@ -329,6 +413,8 @@ function onJobChanged(message) {
 }
 
 function onTaskChanged(message) {
+  if (isDetailJob(message) && applyTaskChanged(detailTasks, message)) renderTasks();
+
   if (!isDisplayed(message)) return;
   if (isLoading) { eventsDuringLoading.push({ type: 'task', message }); return; }
 
@@ -458,17 +544,19 @@ function renderLegend() {
 }
 
 function renderJobs() {
-  $('#jobs-count').text(data.jobs.length);
+  const filtered = filters.id !== null || filters.name !== '';
+  $('#jobs-count').text(data.jobs.length + (filtered ? ' · filtrés' : ''));
 
   if (data.jobs.length === 0) {
-    $('#jobs-tbody').html('<tr class="loading-row"><td colspan="7">Aucun job sur la période</td></tr>');
+    const text = filtered ? 'Aucun job ne correspond aux filtres' : 'Aucun job sur la période';
+    $('#jobs-tbody').html(`<tr class="loading-row"><td colspan="7">${text}</td></tr>`);
     return;
   }
 
   const html = data.jobs.map(job => {
     const progress = Math.max(0, Math.min(100, Number(job.progress) || 0));
     const taskCount = job.taskCount === null || job.taskCount === undefined ? '—' : escapeHtml(job.taskCount);
-    return `<tr>
+    return `<tr class="mon-clickable" data-env="${escapeHtml(job.env)}" data-id="${escapeHtml(job.id)}" title="Voir les tâches">
       <td class="td-env">${escapeHtml(job.env)}</td>
       <td class="td-id">#${escapeHtml(job.id)}</td>
       <td class="td-name" title="${escapeHtml(job.name)}">${escapeHtml(job.name) || '—'}</td>
@@ -484,6 +572,49 @@ function renderJobs() {
     </tr>`;
   }).join('');
   $('#jobs-tbody').html(html);
+}
+
+function showView(name) {
+  $('.view').removeClass('active');
+  $('#view-' + name).addClass('active');
+  window.scrollTo(0, 0);
+}
+
+function renderDetailHeader() {
+  const progress = Math.max(0, Math.min(100, Number(detailJob.progress) || 0));
+  $('#detail-env').text(detailJob.env);
+  $('#detail-title').text('#' + detailJob.id);
+  $('#detail-name').text(detailJob.name || '—');
+  $('#detail-state').html(stateBadge(detailJob.state));
+  $('#detail-progress').text(progress + ' %');
+  $('#detail-updated').text(formatDate(detailJob.updatedAt));
+}
+
+function renderTasks(limit) {
+  $('#detail-tasks-count').text(detailTasks.length);
+
+  if (detailTasks.length === 0) {
+    $('#tasks-tbody').html('<tr class="loading-row"><td colspan="6">Aucune tâche pour ce job</td></tr>');
+    return;
+  }
+
+  const html = detailTasks.map(task => {
+    const output = task.output ? `<div class="td-output">${escapeHtml(task.output)}</div>` : '';
+    return `<tr>
+      <td class="td-id">${escapeHtml(task.taskNumber)}</td>
+      <td class="td-name" title="${escapeHtml(task.name)}">${escapeHtml(task.name) || '—'}</td>
+      <td>${stateBadge(task.state)}</td>
+      <td class="td-command">${escapeHtml(task.commandLine) || '—'}${output}</td>
+      <td class="td-date">${formatDate(task.startDateTime)}</td>
+      <td class="td-date">${formatDate(task.endDateTime)}</td>
+    </tr>`;
+  }).join('');
+
+  // La liste est plafonnée côté serveur : on le signale.
+  const more = limit && detailTasks.length >= limit
+    ? `<tr class="loading-row"><td colspan="6">Seules les ${limit} premières tâches sont affichées</td></tr>`
+    : '';
+  $('#tasks-tbody').html(html + more);
 }
 
 function renderTimeline() {
@@ -542,6 +673,41 @@ function onEnvironmentClick() {
   loadSnapshot();
 }
 
+/** Lit les deux champs de filtre et recharge le tableau. */
+function onFilterChange() {
+  const idText = $('#filter-id').val().trim();
+  const id = idText === '' ? null : Number(idText);
+
+  if (id !== null && (!Number.isInteger(id) || id <= 0)) {
+    showMessage("Filtre ID invalide : saisir un nombre entier.");
+    return;
+  }
+
+  filters = { id: id, name: $('#filter-name').val().trim() };
+  loadSnapshot();
+}
+
+function onJobRowClick() {
+  const env = String($(this).data('env'));
+  const id = Number($(this).data('id'));
+  const job = data.jobs.find(j => j.env === env && j.id === id);
+  if (!job) return;
+
+  // Copie : le détail se met à jour sans dépendre du tableau (filtres, limite de 50 lignes).
+  detailJob = Object.assign({}, job);
+  detailTasks = [];
+  renderDetailHeader();
+  showView('detail');
+  loadJobTasks();
+}
+
+function onBackClick() {
+  detailJob = null;
+  detailTasks = [];
+  showView('list');
+  renderChart(); // le graphique a pu changer de largeur pendant que la liste était cachée
+}
+
 function onPeriodClick() {
   period = String($(this).data('range'));
   if (period === 'custom') fillCustomRangeIfEmpty();
@@ -579,6 +745,9 @@ function startPage() {
   $('#env-tabs').on('click', '.mode-tab', onEnvironmentClick);
   $('#range-tabs').on('click', '.mode-tab', onPeriodClick);
   $('#range-apply').on('click', loadSnapshot);
+  $('#filter-id, #filter-name').on('change', onFilterChange); // Entrée ou sortie du champ
+  $('#jobs-tbody').on('click', 'tr.mon-clickable', onJobRowClick);
+  $('#btn-back').on('click', onBackClick);
   $('#btnHelp').on('click', () => $('#helpOverlay').addClass('open'));
   $(window).on('resize', renderChart);
 
@@ -603,6 +772,8 @@ if (typeof module !== 'undefined') {
     emptyData,
     dataFromSnapshot,
     applyJobChanged,
+    matchesFilters,
+    applyTaskChanged,
     addPointToChart,
     jobTimelineEntry,
     taskTimelineEntry,
