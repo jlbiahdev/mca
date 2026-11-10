@@ -13,3 +13,9 @@ Enfin, je conteste la présentation récurrente de ces situations comme des déf
 Je reste naturellement disponible pour toute clarification technique nécessaire et continuerai à contribuer à l'aboutissement du projet.
 
 Jean-Luc
+
+D'autre part, Raul, je t'avais recommandé d'attendre le retour de Sophian, qui t'a effectivement communiqué vendredi les éléments permettant de résoudre le problème.
+
+Cette information n'ayant pas été reportée dans la présente conversation après votre échange, la situation a continué d'y apparaître comme bloquée.
+
+Une simple mise à jour du fil aurait permis à chacun de disposer du même niveau d'information et d'éviter les conclusions qui ont suivi.
