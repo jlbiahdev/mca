@@ -89,7 +89,7 @@ Dans le projet GitLab : Settings > Access tokens > Add new token.
 |---|---|
 | Nom | Par exemple `prepare-dev-poc` |
 | Rôle | **Maintainer** (obligatoire pour lire les variables) |
-| Scope | `read_api` |
+| Scopes | `read_api` et `read_repository` (lecture du code, pour le runner `ci-dev`) |
 | Expiration | Selon la règle de l'entreprise ; noter la date pour le renouveler |
 
 Copier le jeton affiché : il ne sera plus montré.
