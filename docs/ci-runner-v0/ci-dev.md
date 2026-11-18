@@ -7,7 +7,8 @@ Contenu du script, à copier dans `D:\ci\runner\ci-dev.ps1` (voir `README.md`, �
 .SYNOPSIS
     Runner CI de dev, v0 : à chaque lancement (toutes les minutes), cherche dans GitLab
     les merge requests ouvertes dont le dernier commit n'a pas encore été traité,
-    et dépose les sources de ce commit dans le dossier de build.
+    et dépose les sources de ce commit dans le dossier de build
+    (archive zip générée par GitLab : git n'est pas nécessaire).
 
     v0 : récupération des sources uniquement. Le build et la mise à jour du statut
     dans GitLab viendront dans les versions suivantes.
@@ -30,6 +31,7 @@ $GitLabTokenFile = "D:\ci\runner\gitlab-token.xml"   # jeton chiffré (voir pré
 # <<< FIN CONFIGURATION ───────────────────────────────────────────────────────
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"   # la barre de progression ralentit fortement les téléchargements en PowerShell 5.1
 $script:LogFile = $null
 
 $StateFile = Join-Path $RunnerRoot "processed.txt"   # fichier « j'ai travaillé »
@@ -89,42 +91,44 @@ function Invoke-GitLabApi {
     }
 }
 
-# Le jeton est passé à git par variables d'environnement (et non en ligne de commande),
-# pour qu'il n'apparaisse ni dans la liste des processus ni dans les journaux. Nécessite git 2.31 ou plus.
-function Set-GitAuthentication {
-    param([string]$Token)
-    $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("oauth2:$Token"))
-    $env:GIT_CONFIG_COUNT    = "1"
-    $env:GIT_CONFIG_KEY_0    = "http.extraHeader"
-    $env:GIT_CONFIG_VALUE_0  = "Authorization: Basic $basic"
-    $env:GIT_TERMINAL_PROMPT = "0"
-}
+# Télécharge les sources d'un commit en zip (archive générée par GitLab) et les dépose
+# dans le dossier de build, après l'avoir vidé. Aucun besoin de git sur la machine.
+function Save-CommitSources {
+    param([string]$Commit, [string]$Token)
 
-function Clear-GitAuthentication {
-    Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
-}
+    $workFolder = Join-Path $RunnerRoot "work"
+    $zipFile    = Join-Path $workFolder "sources.zip"
+    $extractDir = Join-Path $workFolder "extract"
+    if (Test-Path $workFolder) { Remove-Item $workFolder -Recurse -Force }
+    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
 
-# ── Commandes git ────────────────────────────────────────────────────────────
-
-# Lance git, recopie sa sortie dans le journal, échoue si le code de sortie n'est pas 0.
-function Invoke-Git {
-    param([string]$Description, [string[]]$Arguments)
-    Write-Log $Description
-    # Windows PowerShell 5.1 transforme en erreur tout message écrit sur la sortie d'erreur
-    # (git y écrit sa progression) : on ne juge la commande que sur son code de sortie.
-    $ErrorActionPreference = "Continue"
-    & git @Arguments 2>&1 | ForEach-Object { Write-Log "    $_" }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Échec ($Description), code de sortie $LASTEXITCODE."
+    Write-Log "Téléchargement des sources du commit $Commit"
+    $uri = "$GitLabUrl/api/v4/projects/$GitLabProjectId/repository/archive.zip?sha=$Commit"
+    try {
+        Invoke-WebRequest -Uri $uri -Headers @{ "PRIVATE-TOKEN" = $Token } -OutFile $zipFile -UseBasicParsing
     }
-}
-
-function Assert-GitVersion {
-    $text = (git --version) -replace '[^\d\.]', ' '
-    $version = [version](($text.Trim() -split '\s+')[0] -replace '^(\d+\.\d+).*$', '$1')
-    if ($version -lt [version]"2.31") {
-        throw "git 2.31 ou plus requis (version détectée : $version)."
+    catch {
+        throw "Téléchargement des sources impossible : $($_.Exception.Message)"
     }
+    Write-Log ("Archive reçue : {0:N1} Mo" -f ((Get-Item $zipFile).Length / 1MB))
+
+    Expand-Archive -Path $zipFile -DestinationPath $extractDir -Force
+    # GitLab range tout le contenu dans un dossier racine <projet>-<commit>-<commit>.
+    $rootFolders = @(Get-ChildItem -Path $extractDir -Directory)
+    if ($rootFolders.Count -ne 1) {
+        throw "Archive inattendue : un seul dossier racine attendu, $($rootFolders.Count) trouvé(s)."
+    }
+
+    Write-Log "Remplacement du contenu de $BuildFolder"
+    if (Test-Path $BuildFolder) {
+        Get-ChildItem -Path $BuildFolder -Force | Remove-Item -Recurse -Force
+    }
+    else {
+        New-Item -ItemType Directory -Path $BuildFolder -Force | Out-Null
+    }
+    Get-ChildItem -Path $rootFolders[0].FullName -Force | Move-Item -Destination $BuildFolder
+
+    Remove-Item $workFolder -Recurse -Force
 }
 
 # ── Fichier « j'ai travaillé » ───────────────────────────────────────────────
@@ -148,6 +152,10 @@ $lock = $null
 try {
     if ([string]::IsNullOrWhiteSpace($GitLabUrl) -or $GitLabProjectId -le 0) {
         throw "Configuration incomplète : renseigner `$GitLabUrl et `$GitLabProjectId en tête du script."
+    }
+    # Le dossier de build est entièrement vidé à chaque MR : on refuse une racine de lecteur.
+    if ([System.IO.Path]::GetPathRoot($BuildFolder) -eq $BuildFolder.TrimEnd('\') + '\') {
+        throw "Le dossier de build ne peut pas être la racine d'un lecteur : $BuildFolder"
     }
     New-Item -ItemType Directory -Path $RunnerRoot -Force | Out-Null
 
@@ -177,26 +185,14 @@ try {
     Write-Log "Runner CI sur $env:COMPUTERNAME, lancé par $env:USERDOMAIN\$env:USERNAME"
     Write-Log "$($toProcess.Count) MR à traiter sur $($mergeRequests.Count) ouverte(s)."
 
-    Assert-GitVersion
-    $project = Invoke-GitLabApi -Path "projects/$GitLabProjectId" -Token $token
-    Set-GitAuthentication -Token $token
-    $token = $null
-
     # 2. Pour chaque MR : sources du dernier commit déposées dans le dossier de build
     foreach ($mr in $toProcess) {
         Write-Log "MR !$($mr.iid) « $($mr.title) » ($($mr.source_branch)) : commit $($mr.sha)"
-
-        if (-not (Test-Path (Join-Path $BuildFolder ".git"))) {
-            Invoke-Git "Clonage du dépôt dans $BuildFolder" @("clone", "--no-checkout", $project.http_url_to_repo, $BuildFolder)
-        }
-        # GitLab expose le dernier commit de chaque MR sous refs/merge-requests/<numéro>/head.
-        Invoke-Git "Récupération de la MR !$($mr.iid)" @("-C", $BuildFolder, "fetch", "origin", "refs/merge-requests/$($mr.iid)/head")
-        Invoke-Git "Positionnement sur $($mr.sha)" @("-C", $BuildFolder, "checkout", "--force", "--detach", $mr.sha)
-        Invoke-Git "Nettoyage du dossier de build" @("-C", $BuildFolder, "clean", "-fdx")
-
+        Save-CommitSources -Commit $mr.sha -Token $token
         Add-Processed -Commit $mr.sha -MergeRequestIid $mr.iid
         Write-Log "MR !$($mr.iid) : sources déposées dans $BuildFolder."
     }
+    $token = $null
 
     exit 0
 }
@@ -205,7 +201,6 @@ catch {
     exit 1
 }
 finally {
-    Clear-GitAuthentication
     if ($lock) { $lock.Dispose() }
 }
 ```

@@ -6,7 +6,7 @@ La création de runners GitLab est bloquée sur l'instance de l'entreprise. Le r
 
 1. demande à GitLab la liste des **merge requests ouvertes** ;
 2. ignore celles dont le dernier commit a déjà été traité (fichier « j'ai travaillé » `D:\ci\runner\processed.txt`) ;
-3. pour chaque autre MR : dépose les sources de son dernier commit dans **`D:\ci\build`** (exactement à l'état du commit, sans fichier résiduel) ;
+3. pour chaque autre MR : télécharge les sources de son dernier commit (zip généré par GitLab), vide **`D:\ci\build`** et y dépose toute la solution telle qu'elle est à ce commit ;
 4. note le commit dans `processed.txt`.
 
 Le build et la mise à jour du statut dans GitLab viendront ensuite (tickets 3 et 4).
@@ -19,11 +19,15 @@ Le script n'utilise que le sens sortant (machine de POC vers GitLab, en HTTPS).
 
 ### 1.1 Logiciels sur la machine de POC
 
+Aucun logiciel à installer : le script n'utilise que Windows PowerShell 5.1. Les sources sont téléchargées en zip, générées par GitLab à la demande (**git n'est pas nécessaire**).
+
+Le SDK .NET servira au build (ticket 3) :
+
 ```powershell
-git --version
+dotnet --list-sdks
 ```
 
-Résultat attendu : `git version 2.31` ou plus (le jeton est passé à git d'une façon qui demande cette version).
+Résultat attendu : une ligne `8.0.xxx`.
 
 ### 1.2 Jeton d'accès GitLab
 
@@ -33,7 +37,7 @@ Dans le projet GitLab : Settings > Access tokens > Add new token.
 |---|---|
 | Nom | Par exemple `ci-dev-poc` |
 | Rôle | **Developer** |
-| Scopes | `read_api` (liste des MR) et `read_repository` (récupération des sources) |
+| Scopes | `read_api` (liste des MR) et `read_repository` (téléchargement des sources) |
 | Expiration | Selon la règle de l'entreprise ; noter la date pour le renouveler |
 
 Copier le jeton affiché : il ne sera plus montré.
@@ -85,7 +89,7 @@ cd D:\ci\runner
 Résultats attendus :
 
 - **aucune MR ouverte** : `Aucune MR à traiter (0 ouverte(s)).` ;
-- **une MR ouverte** : clonage du dépôt, récupération de la MR, puis `MR !<numéro> : sources déposées dans D:\ci\build.` ;
+- **une MR ouverte** : téléchargement des sources (taille de l'archive affichée), remplacement du contenu de `D:\ci\build`, puis `MR !<numéro> : sources déposées dans D:\ci\build.` ;
 - **relancé aussitôt** : `Aucune MR à traiter (1 ouverte(s)).` (le commit est déjà traité).
 
 ---
@@ -125,6 +129,8 @@ Pour faire retraiter une MR : supprimer la ligne de son commit dans `processed.t
 ## 6. Limites de la v0
 
 - **Un seul dossier de build** : si plusieurs MR sont à traiter au même lancement, elles sont traitées l'une après l'autre, et `D:\ci\build` contient la dernière. Sans conséquence tant que le build n'est pas branché (ticket 3), où chaque MR sera compilée juste après la récupération de ses sources.
+- **Contenu de l'archive** : tous les fichiers du dépôt à ce commit, sans le dossier `.git`, ni les sous-modules, ni les fichiers Git LFS.
+- **Chemins longs** : l'extraction du zip par Windows PowerShell 5.1 peut échouer sur des chemins de plus de 260 caractères.
 - **En cas d'erreur**, le commit n'est pas noté : il sera retenté à la minute suivante (une erreur par minute dans les journaux tant qu'elle n'est pas corrigée).
 - **Script non exécuté sur Windows** lors de sa rédaction : à valider avec le premier lancement à la main (§ 3).
 
