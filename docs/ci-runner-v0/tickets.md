@@ -14,8 +14,8 @@ Le déploiement (CD, avec `deploy.ps1`) viendra après ces quatre tickets.
 
 **À faire** :
 
-1. Écrire `ci-dev.ps1` v0 : toutes les minutes, liste des MR ouvertes ; pour chaque MR dont le dernier commit n'est pas encore traité, sources de ce commit déposées dans `D:\ci\build`, puis commit noté dans le fichier « j'ai travaillé » (`D:\ci\runner\processed.txt`).
-2. Prérequis sur la machine de POC : git 2.31 ou plus ; jeton d'accès au projet (rôle Developer, scopes `read_api` et `read_repository`) ; fichier chiffré du jeton.
+1. Écrire `ci-dev.ps1` v0 : toutes les minutes, liste des MR ouvertes ; pour chaque MR dont le dernier commit n'est pas encore traité, sources de ce commit (zip généré par GitLab) déposées dans `D:\ci\build`, puis commit noté dans le fichier « j'ai travaillé » (`D:\ci\runner\processed.txt`).
+2. Prérequis sur la machine de POC : jeton d'accès au projet (rôle Developer, scopes `read_api` et `read_repository`) ; fichier chiffré du jeton. Pas de git : les sources sont téléchargées en zip par l'API GitLab.
 3. Installer le script dans `D:\ci\runner` et créer la tâche planifiée `Styx.CiDev` (toutes les minutes).
 
 **Fini quand** :
