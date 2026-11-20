@@ -66,7 +66,7 @@ Les tickets reportés restent tels quels dans GitLab ; ils seront revus quand le
    - deux statuts publiés sur le même commit (début, puis fin) restent dans le même pipeline.
 2. **Si le test réussit** : le runner-cd publie le statut « en cours » avant le package, lit l'identifiant du pipeline dans la réponse et l'utilise pour la version.
 3. **Si le test échoue** : on garde le format actuel `Styx.Publish.1.AAMMJJ.HHMMSS`.
-4. Dans les deux cas, le format de `legacy/generate_package.ps1` est abandonné, et les scripts de package reçoivent la version en paramètre.
+4. Dans les deux cas, les scripts de package reçoivent la version en paramètre.
 
 **Fini quand** :
 
