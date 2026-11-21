@@ -48,11 +48,17 @@ Ticket : voir `epic.md`, US 2. Copier les deux fichiers dans `D:\ci\runner`, en 
 #>
 [CmdletBinding()]
 param(
-    [string] $ConfigFile = (Join-Path $PSScriptRoot 'ci-dev.psd1')
+    [string] $ConfigFile
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par défaut
+# du bloc param() : le chemin par défaut est donc calculé ici.
+if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
+    $ConfigFile = Join-Path $PSScriptRoot 'ci-dev.psd1'
+}
 
 # La barre de progression ralentit fortement les téléchargements en PowerShell 5.1.
 $ProgressPreference = 'SilentlyContinue'
