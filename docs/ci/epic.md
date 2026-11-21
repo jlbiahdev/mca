@@ -163,7 +163,7 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 **Code** : étape US 2. Ajouts :
 
 - dans `ci-dev.ps1` : journal du jour (`D:\ci\runner\logs\ci-dev-AAAAMMJJ.log`) et verrou (`ci-dev.lock`) qui empêche deux passages simultanés ;
-- nouveau script `install-task.ps1` : crée, ou remplace, la tâche planifiée `Styx.CiDev`.
+- nouveau script `install-task.ps1` : crée, ou remplace, la tâche planifiée `Styx.CiDev`. La tâche tourne avec les privilèges les plus élevés du compte (un compte administrateur garde ses droits sur `D:\ci`, créé depuis une console administrateur), fenêtre de PowerShell masquée.
 
 **Deux modes d'exécution** :
 
@@ -238,7 +238,8 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
 
 - `LastTaskResult` vaut `267011` : la tâche ne s'est pas encore lancée, attendre une minute ;
 - `LastTaskResult` signale un refus d'ouverture de session (mode `-RunWhenLoggedOff`) : le compte n'a pas le droit **Ouvrir une session en tant que tâche** sur la machine ; ce droit est accordé par un administrateur ;
-- `LastTaskResult` vaut `1` : le script a rencontré une erreur, voir le journal du jour.
+- `LastTaskResult` vaut `1` : le script a rencontré une erreur, voir le journal du jour ;
+- le journal ne contient pas les passages de la tâche : lancer le script à la main dans une console **non administrateur** pour voir l'erreur (par exemple `Verrou impossible à créer … Access … denied` : la tâche n'a pas les droits d'écriture sur `D:\ci\runner` ; recréer la tâche avec `install-task.ps1`, qui la lance avec les privilèges les plus élevés).
 
 **Pour arrêter le runner** : `Disable-ScheduledTask -TaskName 'Styx.CiDev'` ; pour le relancer : `Enable-ScheduledTask -TaskName 'Styx.CiDev'`. Pour changer de mode, relancer `install-task.ps1` : la tâche est remplacée.
 

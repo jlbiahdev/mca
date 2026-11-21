@@ -1,6 +1,6 @@
 # US 1 — Connexion à GitLab : code
 
-Ticket : voir `epic.md`, US 1. Copier les deux fichiers dans `D:\ci\runner`, en **UTF-8 avec BOM**, en remplaçant ceux de l'étape précédente (reprendre `GitLabUrl` et `ProjectId`).
+Ticket : voir `epic.md`, US 1. Copier les fichiers dans `D:\ci\runner`, en **UTF-8 avec BOM**, en remplaçant ceux de l'étape précédente (reprendre `GitLabUrl` et `ProjectId`).
 
 ## ci-dev.psd1
 
@@ -116,7 +116,13 @@ function Write-CiLog {
     Write-Host $line -ForegroundColor $color
 
     if ($script:LogFile) {
-        Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8
+        try {
+            Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8
+        }
+        catch {
+            # Le message d'origine reste affiché dans la console.
+            Write-Host "[ATTENTION] Journal impossible à écrire ($($script:LogFile)) : $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 }
 

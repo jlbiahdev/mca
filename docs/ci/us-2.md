@@ -117,7 +117,13 @@ function Write-CiLog {
     Write-Host $line -ForegroundColor $color
 
     if ($script:LogFile) {
-        Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8
+        try {
+            Add-Content -LiteralPath $script:LogFile -Value $line -Encoding UTF8
+        }
+        catch {
+            # Le message d'origine reste affiché dans la console.
+            Write-Host "[ATTENTION] Journal impossible à écrire ($($script:LogFile)) : $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
 }
 
@@ -211,8 +217,17 @@ try {
         $lock = [IO.File]::Open($lockFile, 'OpenOrCreate', 'ReadWrite', 'None')
     }
     catch {
-        Write-CiLog 'Un passage est déjà en cours : rien à faire.'
-        exit 0
+        # Seul un fichier déjà ouvert par un autre passage signifie « en cours » ;
+        # un accès refusé, par exemple, est une vraie erreur.
+        $lockError = $_.Exception
+        if ($lockError.InnerException) { $lockError = $lockError.InnerException }
+
+        if ($lockError -is [IO.IOException]) {
+            Write-CiLog 'Un passage est déjà en cours : rien à faire.'
+            exit 0
+        }
+
+        throw "Verrou impossible à créer ($lockFile) : $($lockError.Message)"
     }
 
     # TLS 1.2 n'est pas actif par défaut dans Windows PowerShell 5.1.
@@ -257,6 +272,11 @@ Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi d
     Avec -RunWhenLoggedOff, elle tourne aussi session fermée : le mot de passe
     du compte est demandé et enregistré par Windows. Une stratégie de
     l'entreprise peut l'interdire (erreur 0x80070520).
+
+    La tâche tourne avec les privilèges les plus élevés du compte : un compte
+    administrateur garde ses droits d'écriture sur les dossiers du runner,
+    créés depuis une console administrateur. La fenêtre de PowerShell est
+    masquée.
 
     Si la tâche existe déjà, elle est remplacée ; en cas d'échec, l'ancienne
     tâche est conservée.
@@ -320,7 +340,7 @@ try {
 
     $action = New-ScheduledTaskAction `
         -Execute 'powershell.exe' `
-        -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
+        -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
         -WorkingDirectory $workingDirectory
 
     # Répétition sans fin, à partir de minuit aujourd'hui.
@@ -347,6 +367,7 @@ try {
                 -Settings $settings `
                 -User $user `
                 -Password $password `
+                -RunLevel Highest `
                 -Force | Out-Null
         }
         catch {
@@ -362,7 +383,7 @@ try {
         $mode = 'session ouverte ou fermée (mot de passe enregistré par Windows)'
     }
     else {
-        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
+        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
 
         Register-ScheduledTask `
             -TaskName $TaskName `
