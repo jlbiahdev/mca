@@ -245,7 +245,7 @@ try {
 
     $token = Get-GitLabToken
 
-    $mergeRequests = Get-OpenMergeRequests -Token $token
+    $mergeRequests = @(Get-OpenMergeRequests -Token $token)
 
     if ($mergeRequests.Count -eq 0) {
         Write-CiLog 'Aucune MR ouverte.'

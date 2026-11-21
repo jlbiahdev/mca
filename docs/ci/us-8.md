@@ -582,7 +582,7 @@ try {
 
     $token = Get-GitLabToken
 
-    $mergeRequests = Get-OpenMergeRequests -Token $token
+    $mergeRequests = @(Get-OpenMergeRequests -Token $token)
     $toProcess = @(
         $mergeRequests |
             Where-Object { -not (Test-AlreadyProcessed -Commit $_.sha) } |
