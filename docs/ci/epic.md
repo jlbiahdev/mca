@@ -163,7 +163,7 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 **Code** : étape US 2. Ajouts :
 
 - dans `ci-dev.ps1` : journal du jour (`D:\ci\runner\logs\ci-dev-AAAAMMJJ.log`) et verrou (`ci-dev.lock`) qui empêche deux passages simultanés ;
-- nouveau script `install-task.ps1` : crée, ou remplace, la tâche planifiée `Styx.CiDev`. La tâche tourne avec les privilèges les plus élevés du compte (un compte administrateur garde ses droits sur `D:\ci`, créé depuis une console administrateur), fenêtre de PowerShell masquée.
+- nouveau script `install-task.ps1` : crée, ou remplace, la tâche planifiée `Styx.CiDev`. La tâche tourne avec les privilèges les plus élevés du compte (un compte administrateur garde ses droits sur `D:\ci`, créé depuis une console administrateur), sans fenêtre (PowerShell est lancé par `conhost.exe --headless`).
 
 **Deux modes d'exécution** :
 
@@ -246,6 +246,7 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
 **Fini quand** :
 
 - la tâche se lance chaque minute (`LastTaskResult` = `0`) ;
+- aucune fenêtre ne s'affiche lors des passages ;
 - le journal contient une ligne par passage ;
 - le mode retenu (par défaut ou session fermée) est noté dans ce ticket ;
 - un lancement à la main pendant qu'un passage tourne affiche `Un passage est déjà en cours : rien à faire.` (difficile à provoquer à cette étape, où un passage dure moins d'une seconde : à revérifier pendant un build, à l'US 6).

@@ -275,8 +275,8 @@ Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi d
 
     La tâche tourne avec les privilèges les plus élevés du compte : un compte
     administrateur garde ses droits d'écriture sur les dossiers du runner,
-    créés depuis une console administrateur. La fenêtre de PowerShell est
-    masquée.
+    créés depuis une console administrateur. PowerShell est lancé sans
+    console (conhost.exe --headless) : aucune fenêtre ne s'affiche.
 
     Si la tâche existe déjà, elle est remplacée ; en cas d'échec, l'ancienne
     tâche est conservée.
@@ -338,9 +338,11 @@ try {
     $workingDirectory = Split-Path -Parent $ScriptPath
     $user             = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 
+    # conhost.exe --headless lance PowerShell sans console : aucune fenêtre ne
+    # s'affiche, même brièvement (-WindowStyle Hidden laisse un clignotement).
     $action = New-ScheduledTaskAction `
-        -Execute 'powershell.exe' `
-        -Argument ('-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
+        -Execute 'conhost.exe' `
+        -Argument ('--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
         -WorkingDirectory $workingDirectory
 
     # Répétition sans fin, à partir de minuit aujourd'hui.
