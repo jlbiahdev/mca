@@ -1,6 +1,6 @@
 # US 2 — Lancement automatique : code
 
-Ticket : voir `epic.md`, US 2. Copier les deux fichiers dans `D:\ci\runner`, en **UTF-8 avec BOM**, en remplaçant ceux de l'étape précédente (reprendre `GitLabUrl` et `ProjectId`).
+Ticket : voir `epic.md`, US 2. Copier les fichiers dans `D:\ci\runner`, en **UTF-8 avec BOM**, en remplaçant ceux de l'étape précédente (reprendre `GitLabUrl` et `ProjectId`).
 
 ## ci-dev.psd1
 
@@ -233,5 +233,162 @@ catch {
 }
 finally {
     if ($lock) { $lock.Dispose() }
+}
+```
+
+## install-task.ps1
+
+Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM ; il ne change plus aux US suivantes.
+
+```powershell
+#requires -Version 5.1
+
+<#
+.SYNOPSIS
+    Crée, ou remplace, la tâche planifiée qui lance le runner CI chaque minute.
+
+.DESCRIPTION
+    La tâche tourne avec le compte qui lance ce script : c'est lui qui a
+    chiffré le jeton GitLab, et lui seul peut le relire.
+
+    Par défaut, la tâche tourne seulement quand la session de ce compte est
+    ouverte (même verrouillée) : aucun mot de passe n'est enregistré.
+
+    Avec -RunWhenLoggedOff, elle tourne aussi session fermée : le mot de passe
+    du compte est demandé et enregistré par Windows. Une stratégie de
+    l'entreprise peut l'interdire (erreur 0x80070520).
+
+    Si la tâche existe déjà, elle est remplacée ; en cas d'échec, l'ancienne
+    tâche est conservée.
+
+.PARAMETER TaskName
+    Nom de la tâche. Par défaut : Styx.CiDev.
+
+.PARAMETER ScriptPath
+    Script du runner. Par défaut : ci-dev.ps1, à côté de ce script.
+
+.PARAMETER IntervalMinutes
+    Intervalle entre deux lancements, en minutes. Par défaut : 1.
+
+.PARAMETER ExecutionTimeLimitHours
+    Durée au-delà de laquelle Windows arrête un passage. Par défaut : 2.
+
+.PARAMETER RunWhenLoggedOff
+    La tâche tourne aussi session fermée (mot de passe enregistré).
+
+.EXAMPLE
+    .\install-task.ps1
+
+.EXAMPLE
+    .\install-task.ps1 -RunWhenLoggedOff
+
+.NOTES
+    Code de sortie : 0 succès, 1 erreur.
+#>
+[CmdletBinding()]
+param(
+    [string] $TaskName = 'Styx.CiDev',
+
+    [string] $ScriptPath,
+
+    [ValidateRange(1, 60)]
+    [int] $IntervalMinutes = 1,
+
+    [ValidateRange(1, 24)]
+    [int] $ExecutionTimeLimitHours = 2,
+
+    [switch] $RunWhenLoggedOff
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+try {
+    # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par
+    # défaut du bloc param() : le chemin par défaut est donc calculé ici.
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        $ScriptPath = Join-Path $PSScriptRoot 'ci-dev.ps1'
+    }
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw "Script du runner introuvable : $ScriptPath"
+    }
+
+    $ScriptPath       = (Resolve-Path -LiteralPath $ScriptPath).Path
+    $workingDirectory = Split-Path -Parent $ScriptPath
+    $user             = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    $action = New-ScheduledTaskAction `
+        -Execute 'powershell.exe' `
+        -Argument ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
+        -WorkingDirectory $workingDirectory
+
+    # Répétition sans fin, à partir de minuit aujourd'hui.
+    $trigger = New-ScheduledTaskTrigger `
+        -Once `
+        -At (Get-Date).Date `
+        -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+
+    # Pas de second lancement si le précédent tourne encore.
+    $settings = New-ScheduledTaskSettingsSet `
+        -MultipleInstances IgnoreNew `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Hours $ExecutionTimeLimitHours)
+
+    if ($RunWhenLoggedOff) {
+        $securePassword = Read-Host "Mot de passe de $user" -AsSecureString
+        $password = [Net.NetworkCredential]::new('', $securePassword).Password
+
+        try {
+            Register-ScheduledTask `
+                -TaskName $TaskName `
+                -Action $action `
+                -Trigger $trigger `
+                -Settings $settings `
+                -User $user `
+                -Password $password `
+                -Force | Out-Null
+        }
+        catch {
+            throw (
+                "Création de la tâche refusée : $($_.Exception.Message)" + [Environment]::NewLine +
+                "Avec le code 0x80070520, une stratégie interdit d'enregistrer le mot de passe : relancer sans -RunWhenLoggedOff."
+            )
+        }
+        finally {
+            $password = $null
+        }
+
+        $mode = 'session ouverte ou fermée (mot de passe enregistré par Windows)'
+    }
+    else {
+        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive
+
+        Register-ScheduledTask `
+            -TaskName $TaskName `
+            -Action $action `
+            -Trigger $trigger `
+            -Settings $settings `
+            -Principal $principal `
+            -Force | Out-Null
+
+        $mode = 'seulement quand la session de ce compte est ouverte (même verrouillée)'
+    }
+
+    $task = Get-ScheduledTask -TaskName $TaskName
+
+    Write-Host ''
+    Write-Host "Tâche $TaskName créée, état : $($task.State)" -ForegroundColor Green
+    Write-Host "  Compte    : $user"
+    Write-Host "  Exécution : $mode"
+    Write-Host "  Script    : $ScriptPath"
+    Write-Host "  Fréquence : toutes les $IntervalMinutes minute(s)"
+    Write-Host ''
+
+    exit 0
+}
+catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit 1
 }
 ```

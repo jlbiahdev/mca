@@ -39,7 +39,7 @@ Dossiers sur la machine de POC :
 
 | Dossier | Contenu |
 |---|---|
-| `D:\ci\runner` | `ci-dev.ps1`, `ci-dev.psd1`, jeton chiffré, `processed.txt`, `logs\` (journal du jour), `builds\` (journal de chaque build) |
+| `D:\ci\runner` | `ci-dev.ps1`, `ci-dev.psd1`, `install-task.ps1`, jeton chiffré, `processed.txt`, `logs\` (journal du jour), `builds\` (journal de chaque build) |
 | `D:\ci\build` | Sources du commit en cours (vidé à chaque commit) |
 
 ## Mettre à jour le code à chaque US
@@ -160,7 +160,17 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 
 **Contexte** : le script doit passer chaque minute sans intervention, et laisser une trace de chaque passage.
 
-**Code** : étape US 2. Ajouts : journal du jour (`D:\ci\runner\logs\ci-dev-AAAAMMJJ.log`) et verrou (`ci-dev.lock`) qui empêche deux passages simultanés.
+**Code** : étape US 2. Ajouts :
+
+- dans `ci-dev.ps1` : journal du jour (`D:\ci\runner\logs\ci-dev-AAAAMMJJ.log`) et verrou (`ci-dev.lock`) qui empêche deux passages simultanés ;
+- nouveau script `install-task.ps1` : crée, ou remplace, la tâche planifiée `Styx.CiDev`.
+
+**Deux modes d'exécution** :
+
+| Mode | Commande | La tâche tourne… | Mot de passe |
+|---|---|---|---|
+| Par défaut | `install-task.ps1` | quand la session du compte est ouverte, même verrouillée ; elle s'arrête à la déconnexion ou au redémarrage, jusqu'à la connexion suivante | non enregistré |
+| Session fermée | `install-task.ps1 -RunWhenLoggedOff` | tout le temps | enregistré par Windows ; une stratégie de l'entreprise peut l'interdire (erreur `0x80070520`) |
 
 ### Dans GitLab
 
@@ -168,11 +178,11 @@ Rien à faire.
 
 ### Sur la machine de POC
 
-Console PowerShell **administrateur**, ouverte avec le compte de l'US 1.
+Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jeton).
 
-1. Installer le code de l'US 2 (voir « Mettre à jour le code à chaque US »).
+1. Installer le code de l'US 2 (voir « Mettre à jour le code à chaque US »), et copier `install-task.ps1` dans `D:\ci\runner` de la même façon.
 
-2. Lancer le script une fois à la main :
+2. Lancer le runner une fois à la main :
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\ci-dev.ps1
@@ -180,31 +190,23 @@ Console PowerShell **administrateur**, ouverte avec le compte de l'US 1.
 
    Résultat attendu : `Passage du runner sur <machine> (<compte>) : connexion GitLab OK, projet « <groupe>/<projet> ».`
 
-3. Préparer l'action de la tâche :
+3. Créer la tâche :
 
    ```powershell
-   $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "D:\ci\runner\ci-dev.ps1"' -WorkingDirectory 'D:\ci\runner'
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\install-task.ps1
    ```
 
-4. Préparer le déclenchement, chaque minute :
+   Résultat attendu :
 
-   ```powershell
-   $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes 1)
+   ```text
+   Tâche Styx.CiDev créée, état : Ready
+     Compte    : <DOMAINE>\<utilisateur>
+     Exécution : seulement quand la session de ce compte est ouverte (même verrouillée)
+     Script    : D:\ci\runner\ci-dev.ps1
+     Fréquence : toutes les 1 minute(s)
    ```
 
-5. Préparer les réglages (pas de second lancement si le précédent tourne encore, arrêt au bout de 2 heures) :
-
-   ```powershell
-   $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 2)
-   ```
-
-6. Créer la tâche avec le compte de l'US 1. Le mot de passe du compte est demandé : la tâche tourne ainsi même sans session ouverte.
-
-   ```powershell
-   Register-ScheduledTask -TaskName 'Styx.CiDev' -Action $action -Trigger $trigger -Settings $settings -User "$env:USERDOMAIN\$env:USERNAME" -Password ([Net.NetworkCredential]::new('', (Read-Host 'Mot de passe du compte' -AsSecureString)).Password)
-   ```
-
-   Résultat attendu : la tâche `Styx.CiDev` est listée, à l'état `Ready`.
+   Pour le mode session fermée, ajouter `-RunWhenLoggedOff` : le mot de passe du compte est demandé. En cas d'erreur `0x80070520`, la stratégie de l'entreprise l'interdit : garder le mode par défaut, ou demander un compte de service autorisé.
 
 ### Vérifications
 
@@ -235,18 +237,19 @@ Console PowerShell **administrateur**, ouverte avec le compte de l'US 1.
 **En cas d'échec** :
 
 - `LastTaskResult` vaut `267011` : la tâche ne s'est pas encore lancée, attendre une minute ;
-- l'enregistrement échoue, ou `LastTaskResult` signale un refus d'ouverture de session : le compte n'a pas le droit **Ouvrir une session en tant que tâche** sur la machine. Ce droit est accordé par un administrateur (stratégie de sécurité locale ou GPO) ;
+- `LastTaskResult` signale un refus d'ouverture de session (mode `-RunWhenLoggedOff`) : le compte n'a pas le droit **Ouvrir une session en tant que tâche** sur la machine ; ce droit est accordé par un administrateur ;
 - `LastTaskResult` vaut `1` : le script a rencontré une erreur, voir le journal du jour.
 
-**Pour arrêter le runner** : `Disable-ScheduledTask -TaskName 'Styx.CiDev'` ; pour le relancer : `Enable-ScheduledTask -TaskName 'Styx.CiDev'`.
+**Pour arrêter le runner** : `Disable-ScheduledTask -TaskName 'Styx.CiDev'` ; pour le relancer : `Enable-ScheduledTask -TaskName 'Styx.CiDev'`. Pour changer de mode, relancer `install-task.ps1` : la tâche est remplacée.
 
 **Fini quand** :
 
-- la tâche se lance chaque minute (`LastTaskResult` = `0`), y compris session fermée ;
+- la tâche se lance chaque minute (`LastTaskResult` = `0`) ;
 - le journal contient une ligne par passage ;
+- le mode retenu (par défaut ou session fermée) est noté dans ce ticket ;
 - un lancement à la main pendant qu'un passage tourne affiche `Un passage est déjà en cours : rien à faire.` (difficile à provoquer à cette étape, où un passage dure moins d'une seconde : à revérifier pendant un build, à l'US 6).
 
-**Attention** : la tâche garde le mot de passe du compte. S'il change, la tâche échoue : la recréer (étape 6, après `Unregister-ScheduledTask -TaskName 'Styx.CiDev'`). Le jeton chiffré ne dépend pas du mot de passe.
+**Attention** : en mode session fermée, la tâche garde le mot de passe du compte. S'il change, la tâche échoue : relancer `install-task.ps1 -RunWhenLoggedOff`. Le jeton chiffré ne dépend pas du mot de passe.
 
 **Dépendances** : US 1.
 
@@ -552,14 +555,14 @@ Fermer la MR de test (**Close merge request**) et supprimer la branche `test/ci-
 
 1. **Présentation** : ce que fait le runner, en une page, avec les dossiers et les fichiers.
 2. **Prérequis** : rôle dans GitLab, compte Windows de la tâche et son droit d'ouverture de session, PowerShell 5.1, SDK .NET 8, accès réseau à GitLab et aux sources NuGet.
-3. **Installation** : dans GitLab (adresse, identifiant du projet, jeton `api`), puis sur la machine (dossiers, jeton chiffré, scripts, configuration, tâche planifiée). Étapes numérotées, une commande par bloc, résultat attendu après chaque commande.
+3. **Installation** : dans GitLab (adresse, identifiant du projet, jeton `api`), puis sur la machine (dossiers, jeton chiffré, scripts, configuration, tâche planifiée avec `install-task.ps1` et le mode retenu). Étapes numérotées, une commande par bloc, résultat attendu après chaque commande.
 4. **Vérification de l'installation** : une MR de test, du commit au statut dans la MR.
 5. **Exploitation** :
    - lire le journal du jour et le journal d'un build ;
    - retraiter un commit ;
    - arrêter et relancer le runner ;
    - renouveler le jeton avant son expiration ;
-   - recréer la tâche après un changement de mot de passe du compte ;
+   - recréer la tâche après un changement de mot de passe du compte (`install-task.ps1`) ;
    - mettre à jour les scripts.
 6. **Dépannage** : un tableau message affiché → cause → action (jeton refusé 401, accès refusé 403, ressource 404, ouverture de session refusée, script de build introuvable, build interrompu, passage déjà en cours).
 7. **Configuration** : rôle de chaque clé de `ci-dev.psd1`.
