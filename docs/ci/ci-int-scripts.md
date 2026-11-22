@@ -1,12 +1,23 @@
-# Scripts du runner `cicd-int`
+# Scripts du runner `ci-int`
 
-À versionner dans le dépôt, dans `src/scripts/devops/cicd/`, en **UTF-8 avec BOM**. Dans `cicd-int.psd1`, `GitLabUrl` et `ProjectId` restent à renseigner sur chaque machine (voir `HOWTO.md`).
+À versionner dans le dépôt, dans `src/scripts/devops/cicd/ci/`, en **UTF-8 avec BOM**.
 
-Renommage par rapport à l'US 10 : `cicd-int-poc` devient `cicd-int` (script, configuration, journaux, verrou) et la tâche `Styx.CicdIntPoc` devient `Styx.CicdInt`. Le code est inchangé par ailleurs.
+Le runner ne fait que de l'intégration continue (build des MR, package et publication sur Artifactory) ; il est donc renommé :
 
-## Passer de `cicd-int-poc` à `cicd-int` sur la machine actuelle
+| Avant | Après |
+|---|---|
+| `cicd-int-poc.ps1`, `cicd-int-poc.psd1` | `ci-int.ps1`, `ci-int.psd1` |
+| tâche `Styx.CicdIntPoc` | tâche `Styx.CiInt` |
+| journal `cicd-int-poc-<date>.log` | `ci-int-<date>.log` |
+| statut `cd-int` (main) | `ci-int-publish` |
+| `processed-cd.txt` | `processed-publish.txt` |
+| clés `CdBranch`, `CdStatusName` | `PublishBranch`, `PublishStatusName` |
 
-Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien n'est reconstruit ni republié.
+Le statut des MR (`ci-int`), la variable GitLab et le jeton ne changent pas. Le code est inchangé par ailleurs.
+
+## Passer à `ci-int` sur la machine actuelle
+
+Le jeton chiffré et les commits déjà traités sont conservés : rien n'est reconstruit ni republié.
 
 1. Supprimer l'ancienne tâche :
 
@@ -14,25 +25,33 @@ Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien 
    Unregister-ScheduledTask -TaskName 'Styx.CicdIntPoc' -Confirm:$false
    ```
 
-2. Copier dans `D:\ci\runner` les cinq fichiers ci-dessous (depuis le dépôt), reporter `GitLabUrl` et `ProjectId` de `cicd-int-poc.psd1` dans `cicd-int.psd1`, puis supprimer `cicd-int-poc.ps1` et `cicd-int-poc.psd1`.
-3. Enregistrer les fichiers en UTF-8 avec BOM.
-4. Lancer un passage à la main :
+2. Renommer le fichier des commits publiés (sinon le dernier commit de `main` serait republié) :
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int.ps1
+   Rename-Item D:\ci\runner\processed-cd.txt processed-publish.txt
+   ```
+
+3. Copier dans `D:\ci\runner` les fichiers ci-dessous, reporter `GitLabUrl` et `ProjectId` de `cicd-int-poc.psd1` dans `ci-int.psd1`, puis supprimer `cicd-int-poc.ps1` et `cicd-int-poc.psd1`.
+4. Enregistrer les fichiers en UTF-8 avec BOM.
+5. Lancer un passage à la main :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\ci-int.ps1
    ```
 
    Résultat attendu : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
 
-5. Installer la tâche :
+6. Installer la tâche :
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\install-task.ps1
    ```
 
-   Résultat attendu : `Tâche Styx.CicdInt créée, état : Ready`. Le journal du jour s'appelle désormais `logs\cicd-int-<date>.log`.
+   Résultat attendu : `Tâche Styx.CiInt créée, état : Ready`.
 
-## cicd-int.psd1
+Les commits de `main` déjà publiés gardent leur statut `cd-int` dans GitLab ; les suivants porteront `ci-int-publish`.
+
+## ci-int.psd1
 
 ```powershell
 @{
@@ -56,7 +75,7 @@ Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien 
     # commit : ne rien y mettre d'autre.
     BuildRoot  = 'D:\ci\build'
 
-    # ── Build (CI, merge requests) ──────────────────────────────────────────
+    # ── Build (merge requests) ──────────────────────────────────────────
     # Script de build, relatif à la racine des sources téléchargées.
     BuildScript         = 'src\scripts\devops\int\build.ps1'
 
@@ -70,12 +89,12 @@ Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien 
     # Nom du statut affiché sur les commits des MR.
     StatusName = 'ci-int'
 
-    # ── Publication (CD, branche main) ──────────────────────────────────────
+    # ── Publication (publication, branche main) ──────────────────────────────────────
     # Branche dont chaque nouveau commit est packagé et publié.
-    CdBranch     = 'main'
+    PublishBranch     = 'main'
 
     # Nom du statut affiché sur les commits de main.
-    CdStatusName = 'cd-int'
+    PublishStatusName = 'ci-int-publish'
 
     # Scripts de package et de push, relatifs à la racine des sources.
     PackageScript = 'src\scripts\devops\int\package.ps1'
@@ -95,22 +114,22 @@ Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien 
 }
 ```
 
-## cicd-int.ps1
+## ci-int.ps1
 
 ```powershell
 #requires -Version 5.1
 
 <#
 .SYNOPSIS
-    Runner CI/CD d'intégration : à chaque passage, compile le dernier commit
+    Runner CI d'intégration : à chaque passage, compile le dernier commit
     des merge requests ouvertes (CI), puis package et publie sur Artifactory
-    le dernier commit de main (CD).
+    le dernier commit de main (publication).
 
 .DESCRIPTION
-    Le script est lancé chaque minute par la tâche planifiée Styx.CicdInt et
+    Le script est lancé chaque minute par la tâche planifiée Styx.CiInt et
     fait un seul passage :
 
-    1. lit la configuration (cicd-int.psd1) et le jeton GitLab chiffré ;
+    1. lit la configuration (ci-int.psd1) et le jeton GitLab chiffré ;
     2. CI : pour chaque MR ouverte dont le dernier commit n'a pas été traité :
        - publie le statut « en cours » (StatusName) sur le commit ;
        - télécharge les sources du commit (zip généré par GitLab, sans git) ;
@@ -120,23 +139,23 @@ Le jeton chiffré, `processed.txt` et `processed-cd.txt` sont conservés : rien 
          un lien vers le journal ;
        - en cas d'échec, publie dans la MR un commentaire avec les erreurs ;
        - note le commit comme traité (processed.txt) ;
-    3. CD : si le dernier commit de CdBranch (main) n'a pas été publié :
-       - publie le statut « en cours » (CdStatusName) et lit l'identifiant du
+    3. Publication : si le dernier commit de PublishBranch (main) n'a pas été publié :
+       - publie le statut « en cours » (PublishStatusName) et lit l'identifiant du
          pipeline externe créé par GitLab : il donne la version du package ;
        - télécharge les sources, lance le script de package avec cette
          version, puis le script de push avec la clé Artifactory lue dans une
          variable GitLab ;
        - dépose les journaux dans GitLab, publie « réussi » ou « échoué » ;
-       - note le commit comme traité (processed-cd.txt).
+       - note le commit comme traité (processed-publish.txt).
 
     Une erreur du runner (GitLab injoignable, téléchargement impossible) ne
     marque pas le commit comme traité : il est repris au passage suivant.
 
 .PARAMETER ConfigFile
-    Fichier de configuration. Par défaut : cicd-int.psd1, à côté du script.
+    Fichier de configuration. Par défaut : ci-int.psd1, à côté du script.
 
 .EXAMPLE
-    .\cicd-int.ps1
+    .\ci-int.ps1
 
 .NOTES
     Code de sortie : 0 succès (y compris build en échec, publié dans GitLab),
@@ -153,7 +172,7 @@ $ErrorActionPreference = 'Stop'
 # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par défaut
 # du bloc param() : le chemin par défaut est donc calculé ici.
 if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
-    $ConfigFile = Join-Path $PSScriptRoot 'cicd-int.psd1'
+    $ConfigFile = Join-Path $PSScriptRoot 'ci-int.psd1'
 }
 
 # La barre de progression ralentit fortement les téléchargements en PowerShell 5.1.
@@ -180,7 +199,7 @@ function Read-CiConfiguration {
         'GitLabUrl', 'ProjectId', 'TokenFile', 'RunnerRoot',
         'BuildRoot', 'BuildScript', 'BuildEnvironment',
         'BuildTimeoutMinutes', 'StatusName',
-        'CdBranch', 'CdStatusName', 'PackageScript', 'PushScript',
+        'PublishBranch', 'PublishStatusName', 'PackageScript', 'PushScript',
         'PackageRoot', 'VersionFormat', 'ArtifactoryKeyVariable'
     )
 
@@ -245,7 +264,7 @@ function Write-CiLog {
 function Initialize-CiLog {
     $logFolder = Join-Path $script:Config.RunnerRoot 'logs'
     New-Item -ItemType Directory -Path $logFolder -Force | Out-Null
-    $script:LogFile = Join-Path $logFolder ('cicd-int-{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
+    $script:LogFile = Join-Path $logFolder ('ci-int-{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
 }
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
@@ -496,7 +515,7 @@ function Get-BranchHead {
         [string] $Token
     )
 
-    $branch = [uri]::EscapeDataString($script:Config.CdBranch)
+    $branch = [uri]::EscapeDataString($script:Config.PublishBranch)
     $path = 'projects/{0}/repository/branches/{1}' -f $script:Config.ProjectId, $branch
     return (Invoke-GitLabApi -Path $path -Token $Token).commit
 }
@@ -964,7 +983,7 @@ function New-FailureNote {
 
 function Get-ProcessedFile {
     param(
-        # processed.txt pour la CI, processed-cd.txt pour la CD.
+        # processed.txt pour les MR, processed-publish.txt pour main.
         [string] $Name = 'processed.txt'
     )
 
@@ -990,7 +1009,7 @@ function Add-Processed {
         [Parameter(Mandatory)]
         [string] $Commit,
 
-        # « MR !<numéro> » pour la CI, « main 1.0.<pipeline> » pour la CD.
+        # « MR !<numéro> » pour les MR, « main 1.0.<pipeline> » pour main.
         [Parameter(Mandatory)]
         [string] $Origin,
 
@@ -1110,9 +1129,9 @@ function Invoke-ReleaseBuild {
 
     $head = Get-BranchHead -Token $Token
     $commit = $head.id
-    $branch = $script:Config.CdBranch
+    $branch = $script:Config.PublishBranch
 
-    if (Test-AlreadyProcessed -Commit $commit -Name 'processed-cd.txt') {
+    if (Test-AlreadyProcessed -Commit $commit -Name 'processed-publish.txt') {
         return $false
     }
 
@@ -1128,7 +1147,7 @@ function Invoke-ReleaseBuild {
 
     if ($missing.Count -gt 0) {
         Write-CiLog "Branche $branch : commit $commit ignoré, scripts absents du commit : $($missing -join ', ')" 'ATTENTION'
-        Add-Processed -Commit $commit -Origin $branch -Result 'ignored' -Name 'processed-cd.txt'
+        Add-Processed -Commit $commit -Origin $branch -Result 'ignored' -Name 'processed-publish.txt'
         return $true
     }
 
@@ -1140,7 +1159,7 @@ function Invoke-ReleaseBuild {
         Token  = $Token
         Commit = $commit
         Ref    = $branch
-        Name   = $script:Config.CdStatusName
+        Name   = $script:Config.PublishStatusName
     }
 
     $pipelineId = Set-CommitStatus @statusTarget -State running -Description "Package en cours sur $env:COMPUTERNAME"
@@ -1236,7 +1255,7 @@ function Invoke-ReleaseBuild {
     $null = Set-CommitStatus @statusTarget -PipelineId $pipelineId `
         -State $state -Description $description -TargetUrl $linkUrl
 
-    Add-Processed -Commit $commit -Origin "$branch $version" -Result $state -Name 'processed-cd.txt'
+    Add-Processed -Commit $commit -Origin "$branch $version" -Result $state -Name 'processed-publish.txt'
     return $true
 }
 
@@ -1251,7 +1270,7 @@ try {
     Initialize-CiLog
 
     # Un seul passage à la fois : le verrou est libéré à la fin du processus.
-    $lockFile = Join-Path $script:Config.RunnerRoot 'cicd-int.lock'
+    $lockFile = Join-Path $script:Config.RunnerRoot 'ci-int.lock'
     try {
         $lock = [IO.File]::Open($lockFile, 'OpenOrCreate', 'ReadWrite', 'None')
     }
@@ -1277,7 +1296,7 @@ try {
 
     $exitCode = 0
 
-    # CI et CD sont indépendantes : une erreur de l'une n'empêche pas l'autre.
+    # CI des MR et publication de main sont indépendantes : une erreur de l'une n'empêche pas l'autre.
     try {
         $mergeRequests = @(Get-OpenMergeRequests -Token $token)
         $toProcess = @(
@@ -1308,14 +1327,14 @@ try {
         $published = Invoke-ReleaseBuild -Token $token
     }
     catch {
-        Write-CiLog "CD : $($_.Exception.Message)" 'ERREUR'
+        Write-CiLog "Publication : $($_.Exception.Message)" 'ERREUR'
         $published = $true
         $exitCode = 1
     }
 
     # Passage sans rien à faire : une seule ligne dans le journal.
     if ($ciSummary -and -not $published) {
-        Write-CiLog "$ciSummary, $($script:Config.CdBranch) à jour."
+        Write-CiLog "$ciSummary, $($script:Config.PublishBranch) à jour."
     }
 
     exit $exitCode
@@ -1336,7 +1355,7 @@ finally {
 
 <#
 .SYNOPSIS
-    Crée, ou remplace, la tâche planifiée qui lance le runner CI/CD chaque minute.
+    Crée, ou remplace, la tâche planifiée qui lance le runner CI chaque minute.
 
 .DESCRIPTION
     La tâche tourne avec le compte qui lance ce script.
@@ -1358,10 +1377,10 @@ finally {
     tâche est conservée.
 
 .PARAMETER TaskName
-    Nom de la tâche. Par défaut : Styx.CicdInt.
+    Nom de la tâche. Par défaut : Styx.CiInt.
 
 .PARAMETER ScriptPath
-    Script du runner. Par défaut : cicd-int.ps1, à côté de ce script.
+    Script du runner. Par défaut : ci-int.ps1, à côté de ce script.
 
 .PARAMETER IntervalMinutes
     Intervalle entre deux lancements, en minutes. Par défaut : 1.
@@ -1384,7 +1403,7 @@ finally {
 #>
 [CmdletBinding()]
 param(
-    [string] $TaskName = 'Styx.CicdInt',
+    [string] $TaskName = 'Styx.CiInt',
 
     [string] $ScriptPath,
 
@@ -1404,7 +1423,7 @@ try {
     # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par
     # défaut du bloc param() : le chemin par défaut est donc calculé ici.
     if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
-        $ScriptPath = Join-Path $PSScriptRoot 'cicd-int.ps1'
+        $ScriptPath = Join-Path $PSScriptRoot 'ci-int.ps1'
     }
 
     if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
@@ -1637,7 +1656,7 @@ catch {
     du SHA-256, pour voir si deux fichiers contiennent le même jeton) et la
     description renvoyée par GitLab (nom, scopes, actif).
 
-    L'adresse de GitLab est lue dans cicd-int.psd1.
+    L'adresse de GitLab est lue dans ci-int.psd1.
 
     À lancer avec le compte qui a chiffré les fichiers XML.
 
@@ -1659,7 +1678,7 @@ if ([string]::IsNullOrWhiteSpace($RunnerRoot)) {
     $RunnerRoot = $PSScriptRoot
 }
 
-$config = Import-PowerShellDataFile -LiteralPath (Join-Path $RunnerRoot 'cicd-int.psd1')
+$config = Import-PowerShellDataFile -LiteralPath (Join-Path $RunnerRoot 'ci-int.psd1')
 $url    = ([string] $config.GitLabUrl).TrimEnd('/')
 
 Add-Type -AssemblyName System.Security

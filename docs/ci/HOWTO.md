@@ -1,4 +1,4 @@
-# Mettre en place le runner CI/CD sur un autre projet
+# Mettre en place le runner CI sur un autre projet
 
 Ce document décrit, étape par étape, l'installation du runner (`README.md` explique son fonctionnement). À la fin, chaque commit de MR est compilé et chaque merge dans `main` publie un package sur Artifactory, sans runner GitLab.
 
@@ -29,7 +29,7 @@ Le dépôt doit contenir, dans `src/scripts/devops/` :
 | `int/package.ps1` | génération du package (`-RepositoryRoot`, `-PackageVersion`, `-OutputDirectory`) |
 | `int/push-artifactory.ps1` | push du package (`-PackageFile`, `-RepositoryRoot`, `-Environment`) |
 | `config/int.psd1` | configuration de l'environnement, dont `Artifactory.BaseUrl`, `Artifactory.Repository`, `Artifactory.ApiKeyVariable` |
-| `cicd/` | scripts du runner : `cicd-int.ps1`, `cicd-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1` |
+| `cicd/ci/` | scripts du runner : `ci-int.ps1`, `ci-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1` |
 
 Vérifier sur un poste de développeur que la solution se restaure avec un dossier de paquets vide :
 
@@ -52,7 +52,7 @@ Résultat attendu : aucune erreur `NU1101`, `NU1102` ni `NU1301`.
 
    | Champ | Valeur |
    |---|---|
-   | Token name | `cicd-int-<projet>-api` |
+   | Token name | `ci-int-<projet>-api` |
    | Expiration date | selon la règle de l'entreprise ; noter la date pour le renouvellement |
    | Select a role | **Maintainer** |
    | Select scopes | `api` |
@@ -74,7 +74,7 @@ Si le menu **Access tokens** n'existe pas, l'instance interdit peut-être les je
 | Visibility | `Masked` |
 | Protect variable | décoché |
 | Expand variable reference | décoché |
-| Description | `Clé Artifactory du runner cicd-int` |
+| Description | `Clé Artifactory du runner ci-int` |
 | Key | `ARTIFACTORY_API_KEY` (même nom que `Artifactory.ApiKeyVariable` dans `config/int.psd1`) |
 | Value | la clé Artifactory |
 
@@ -101,7 +101,7 @@ Résultat attendu : la liste des trois dossiers.
 
 ### 3.2 Scripts du runner
 
-1. Copier dans `D:\ci\runner` les cinq fichiers de `src/scripts/devops/cicd/` du dépôt (git n'est pas nécessaire sur la machine : copie depuis un poste de développeur par la connexion Bureau à distance, ou téléchargement de chaque fichier depuis GitLab, bouton **Download**).
+1. Copier dans `D:\ci\runner` les scripts de `src/scripts/devops/cicd/ci/` du dépôt (`ci-int.ps1`, `ci-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1`) (git n'est pas nécessaire sur la machine : copie depuis un poste de développeur par la connexion Bureau à distance, ou téléchargement de chaque fichier depuis GitLab, bouton **Download**).
 2. Débloquer les fichiers copiés :
 
    ```powershell
@@ -112,7 +112,7 @@ Résultat attendu : la liste des trois dossiers.
 
 ### 3.3 Configuration
 
-1. Ouvrir `D:\ci\runner\cicd-int.psd1` dans un éditeur et renseigner `GitLabUrl` et `ProjectId` (§ 2.1). Adapter les autres clés si besoin (§ 5).
+1. Ouvrir `D:\ci\runner\ci-int.psd1` dans un éditeur et renseigner `GitLabUrl` et `ProjectId` (§ 2.1). Adapter les autres clés si besoin (§ 5).
 2. Enregistrer tous les scripts en UTF-8 **avec BOM**, sinon Windows PowerShell 5.1 affiche mal les accents et peut refuser les scripts :
 
    ```powershell
@@ -124,7 +124,7 @@ Résultat attendu : la liste des trois dossiers.
 3. Vérifier la configuration :
 
    ```powershell
-   Import-PowerShellDataFile D:\ci\runner\cicd-int.psd1
+   Import-PowerShellDataFile D:\ci\runner\ci-int.psd1
    ```
 
    Résultat attendu : la liste des clés et de leurs valeurs, sans erreur.
@@ -149,7 +149,7 @@ Vider ensuite le presse-papiers (copier n'importe quel autre texte).
 ### 3.5 Premier passage, à la main
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\ci-int.ps1
 ```
 
 Résultat attendu, selon l'état du projet :
@@ -169,10 +169,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\install-task.ps
 Résultat attendu :
 
 ```text
-Tâche Styx.CicdInt créée, état : Ready
+Tâche Styx.CiInt créée, état : Ready
   Compte    : <domaine>\<compte>
   Exécution : ...
-  Script    : D:\ci\runner\cicd-int.ps1
+  Script    : D:\ci\runner\ci-int.ps1
   Fréquence : toutes les 1 minute(s)
 ```
 
@@ -181,7 +181,7 @@ Aucun mot de passe n'est demandé : c'est normal (« Do not store password »).
 Une à deux minutes plus tard, le journal du jour reçoit une ligne par minute :
 
 ```powershell
-Get-Content D:\ci\runner\logs\cicd-int-$(Get-Date -Format yyyyMMdd).log -Tail 3
+Get-Content D:\ci\runner\logs\ci-int-$(Get-Date -Format yyyyMMdd).log -Tail 3
 ```
 
 Résultat attendu : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`, une ligne par minute.
@@ -192,17 +192,17 @@ Résultat attendu : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`, une 
 2. **Build réussi** : sur une branche de test, faire un commit qui compile et créer la MR. Résultat attendu, dans les deux minutes : la MR affiche un pipeline en cours (`ci-int`), puis « passed » ; un clic sur le job ouvre le journal du build.
 3. **Build en échec** : sur la même MR, commit d'une ligne invalide dans un fichier `.cs`. Résultat attendu : pipeline « failed », commentaire dans la MR avec l'erreur de compilation, bouton **Merge** bloqué (« Pipeline must succeed »).
 4. **Correction** : commit qui corrige. Résultat attendu : pipeline « passed », MR fusionnable.
-5. **Publication** : fusionner la MR. Résultat attendu, au passage suivant : sur la page du commit de fusion, pipeline « passed » (`cd-int`), et le package `Styx.Publish` en version `1.0.<numéro du pipeline>` sur Artifactory.
+5. **Publication** : fusionner la MR. Résultat attendu, au passage suivant : sur la page du commit de fusion, pipeline « passed » (`ci-int-publish`), et le package `Styx.Publish` en version `1.0.<numéro du pipeline>` sur Artifactory.
 6. **Secret** : rechercher les premiers caractères de la clé Artifactory et du jeton dans `D:\ci\runner\logs` et `D:\ci\runner\builds`. Résultat attendu : aucun résultat ; le journal du push affiche `--api-key ***`.
 
 ## 5. Adaptations
 
 | Besoin | Où |
 |---|---|
-| Autre script de build, de package ou de push | `BuildScript`, `PackageScript`, `PushScript` dans `cicd-int.psd1` |
-| Autre environnement | `BuildEnvironment` dans `cicd-int.psd1`, et `config\<env>.psd1` dans le dépôt |
-| Autre branche publiée | `CdBranch` |
-| Noms des statuts affichés dans GitLab | `StatusName`, `CdStatusName` |
+| Autre script de build, de package ou de push | `BuildScript`, `PackageScript`, `PushScript` dans `ci-int.psd1` |
+| Autre environnement | `BuildEnvironment` dans `ci-int.psd1`, et `config\<env>.psd1` dans le dépôt |
+| Autre branche publiée | `PublishBranch` |
+| Noms des statuts affichés dans GitLab | `StatusName`, `PublishStatusName` |
 | Format de version | `VersionFormat` (`{0}` = numéro du pipeline) |
 | Autres dossiers | `RunnerRoot`, `BuildRoot`, `PackageRoot`, `TokenFile` |
 | Build plus long | `BuildTimeoutMinutes` |

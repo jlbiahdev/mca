@@ -1,4 +1,4 @@
-# Runner CI/CD d'intégration (`cicd-int`)
+# Runner CI d'intégration (`ci-int`)
 
 Ce document explique le fonctionnement du runner et son exploitation. Sa mise en place pour un autre projet est décrite dans `HOWTO.md`.
 
@@ -6,8 +6,10 @@ Ce document explique le fonctionnement du runner et son exploitation. Sa mise en
 
 La création de runners GitLab est bloquée sur l'instance : GitLab ne peut rien exécuter. Le runner les remplace par un script PowerShell installé sur la machine d'intégration (int), lancé chaque minute par une tâche planifiée, qui interroge GitLab par son API.
 
-- **CI** : à chaque nouveau commit d'une merge request, la solution est compilée et le résultat s'affiche dans la MR (statut `ci-int`).
-- **CD** : à chaque nouveau commit de `main` (après un merge), le package `Styx.Publish` est généré et poussé sur Artifactory (statut `cd-int`). Le déploiement n'est pas fait par le runner.
+- **Merge requests** : à chaque nouveau commit d'une MR, la solution est compilée et le résultat s'affiche dans la MR (statut `ci-int`).
+- **Publication** : à chaque nouveau commit de `main` (après un merge), le package `Styx.Publish` est généré et poussé sur Artifactory (statut `ci-int-publish`).
+
+Le runner fait uniquement de l'intégration continue : il produit et publie le package. Le déploiement sur les serveurs (CD) relève des scripts de `cicd/cd/`.
 
 Les résultats sont visibles dans GitLab comme ceux d'un pipeline : GitLab crée un pipeline « externe » pour chaque commit qui reçoit un statut.
 
@@ -15,7 +17,7 @@ Les résultats sont visibles dans GitLab comme ceux d'un pipeline : GitLab crée
 
 Chaque minute, la tâche lance le script, qui fait un seul passage puis s'arrête. Un verrou empêche deux passages simultanés : si le précédent n'est pas fini (build long), le nouveau s'arrête aussitôt (`Un passage est déjà en cours : rien à faire.`).
 
-### CI : les merge requests
+### Les merge requests
 
 Pour chaque MR ouverte dont le dernier commit n'est pas dans `processed.txt` :
 
@@ -29,16 +31,16 @@ Pour chaque MR ouverte dont le dernier commit n'est pas dans `processed.txt` :
 
 Un commit n'est construit qu'une fois. Un nouveau commit sur la MR relance un build.
 
-### CD : la branche `main`
+### La publication : la branche `main`
 
-Si le dernier commit de `main` n'est pas dans `processed-cd.txt` :
+Si le dernier commit de `main` n'est pas dans `processed-publish.txt` :
 
-1. vérification, par l'API, que ce commit contient les scripts de package et de push ; sinon (commit antérieur à la mise en place de la CD), il est noté `ignored`, sans statut ni téléchargement ;
-2. publication du statut `cd-int` « en cours » ; le numéro du pipeline externe donne la version : `1.0.<pipeline>` ;
+1. vérification, par l'API, que ce commit contient les scripts de package et de push ; sinon (commit antérieur à la mise en place de la publication), il est noté `ignored`, sans statut ni téléchargement ;
+2. publication du statut `ci-int-publish` « en cours » ; le numéro du pipeline externe donne la version : `1.0.<pipeline>` ;
 3. lecture de la clé Artifactory dans la variable GitLab `ARTIFACTORY_API_KEY` ;
 4. téléchargement des sources, puis `src\scripts\devops\int\package.ps1` (compilation en Release et génération du package dans `D:\ci\packages\<version>`) et `src\scripts\devops\int\push-artifactory.ps1` ; la clé est transmise au script de push par l'environnement du processus, jamais par la ligne de commande ni dans un fichier ;
 5. dépôt des journaux du package et du push dans GitLab, publication du statut « réussi » (`Version 1.0.<n> publiée sur Artifactory…`) ou « échoué » ;
-6. inscription du commit dans `processed-cd.txt`.
+6. inscription du commit dans `processed-publish.txt`.
 
 Depuis une version publiée, on retrouve son pipeline (`#<n>`) et donc son commit dans GitLab.
 
@@ -46,28 +48,28 @@ Depuis une version publiée, on retrouve son pipeline (`#<n>`) et donc son commi
 
 - **Échec du build, du package ou du push** : c'est le résultat du commit. Il est publié dans GitLab, le commit est noté et n'est pas retenté.
 - **Erreur du runner** (GitLab injoignable, téléchargement impossible, script de build introuvable, clé illisible) : le statut passe à « échoué » avec le message, mais le commit n'est pas noté : il est repris au passage suivant, une fois la cause corrigée.
-- Une erreur de la CI n'empêche pas la CD, et inversement.
+- Une erreur sur les MR n'empêche pas la publication de `main`, et inversement.
 
 ## 3. Fichiers et dossiers
 
 | Emplacement | Contenu |
 |---|---|
-| `D:\ci\runner\cicd-int.ps1` | le runner |
-| `D:\ci\runner\cicd-int.psd1` | sa configuration (aucun secret) |
+| `D:\ci\runner\ci-int.ps1` | le runner |
+| `D:\ci\runner\ci-int.psd1` | sa configuration (aucun secret) |
 | `D:\ci\runner\gitlab-token.dat` | le jeton GitLab chiffré |
 | `D:\ci\runner\install-task.ps1`, `protect-token.ps1`, `diag-token.ps1` | installation de la tâche, chiffrement du jeton, diagnostic du jeton |
 | `D:\ci\runner\processed.txt` | commits de MR traités : `<commit>  MR !<n>  <résultat>  <date>` |
-| `D:\ci\runner\processed-cd.txt` | commits de `main` traités : `<commit>  main <version>  <résultat>  <date>` |
-| `D:\ci\runner\logs\cicd-int-<date>.log` | journal du jour : une ligne par passage au minimum |
+| `D:\ci\runner\processed-publish.txt` | commits de `main` traités : `<commit>  main <version>  <résultat>  <date>` |
+| `D:\ci\runner\logs\ci-int-<date>.log` | journal du jour : une ligne par passage au minimum |
 | `D:\ci\runner\builds\<date>-<commit>-<étape>.log` | journal de chaque build, package ou push (`.err.log` : sortie d'erreur) |
 | `D:\ci\build` | sources du commit en cours, **vidé à chaque commit** |
 | `D:\ci\packages\<version>` | packages générés |
 
-Les scripts du runner sont aussi versionnés dans le dépôt (`src\scripts\devops\cicd\`) ; ceux de la machine en sont une copie.
+Les scripts du runner sont versionnés dans le dépôt, dans `src\scripts\devops\cicd\ci\`.
 
 ## 4. Tâche planifiée
 
-- Nom : `Styx.CicdInt`, créée par `install-task.ps1`, avec le compte qui lance ce script.
+- Nom : `Styx.CiInt`, créée par `install-task.ps1`, avec le compte qui lance ce script.
 - Fréquence : toutes les minutes, sans fin ; un lancement est ignoré si le précédent tourne encore.
 - Mode : « Do not store password » : la tâche tourne que la session soit ouverte ou non, y compris après un redémarrage, sans mot de passe enregistré (une stratégie de l'entreprise interdit de l'enregistrer). Contrepartie : la tâche n'accède pas aux ressources réseau authentifiées par le compte Windows (partages). Les appels à GitLab et à Artifactory, authentifiés par jeton, ne sont pas concernés.
 - Privilèges les plus élevés du compte, et PowerShell lancé sans console (`conhost.exe --headless`) : aucune fenêtre ne s'affiche.
@@ -80,7 +82,7 @@ Les scripts du runner sont aussi versionnés dans le dépôt (`src\scripts\devop
 
 La clé Artifactory n'est pas sur la machine : elle est dans la variable de projet GitLab `ARTIFACTORY_API_KEY` (masquée), et une seule mise à jour suffit à chaque renouvellement.
 
-## 6. Configuration (`cicd-int.psd1`)
+## 6. Configuration (`ci-int.psd1`)
 
 | Clé | Rôle |
 |---|---|
@@ -93,8 +95,8 @@ La clé Artifactory n'est pas sur la machine : elle est dans la variable de proj
 | `BuildEnvironment` | environnement transmis aux scripts du dépôt (`config\<env>.psd1`) |
 | `BuildTimeoutMinutes` | au-delà, le build, le package ou le push est arrêté et déclaré en échec |
 | `StatusName` | nom du statut des MR (`ci-int`) |
-| `CdBranch` | branche publiée (`main`) |
-| `CdStatusName` | nom du statut de `main` (`cd-int`) |
+| `PublishBranch` | branche publiée (`main`) |
+| `PublishStatusName` | nom du statut de `main` (`ci-int-publish`) |
 | `PackageScript`, `PushScript` | scripts de package et de push, relatifs à la racine des sources |
 | `PackageRoot` | dossier des packages générés |
 | `VersionFormat` | format de version, `{0}` = numéro du pipeline (`1.0.{0}`) |
@@ -106,27 +108,27 @@ Le fichier est lu à chaque passage : une modification est prise en compte à la
 
 ### Suivre l'activité
 
-- Dans GitLab : statut des MR, **Build > Pipelines**, page d'un commit de `main` ; un clic sur le job (`ci-int` ou `cd-int`) ouvre le journal.
-- Sur la machine : le journal du jour, `D:\ci\runner\logs\cicd-int-<date>.log`. Sans activité, une ligne par minute : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
+- Dans GitLab : statut des MR, **Build > Pipelines**, page d'un commit de `main` ; un clic sur le job (`ci-int` ou `ci-int-publish`) ouvre le journal.
+- Sur la machine : le journal du jour, `D:\ci\runner\logs\ci-int-<date>.log`. Sans activité, une ligne par minute : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
 
 ### Reconstruire ou republier un commit
 
-Supprimer la ligne du commit dans `processed.txt` (MR) ou `processed-cd.txt` (`main`) : il est traité au passage suivant. Pour `main`, uniquement si le push n'a pas abouti : republier une version déjà présente sur Artifactory échoue (conflit 409).
+Supprimer la ligne du commit dans `processed.txt` (MR) ou `processed-publish.txt` (`main`) : il est traité au passage suivant. Pour `main`, uniquement si le push n'a pas abouti : republier une version déjà présente sur Artifactory échoue (conflit 409).
 
 ### Arrêter et relancer
 
 ```powershell
-Disable-ScheduledTask -TaskName 'Styx.CicdInt'
+Disable-ScheduledTask -TaskName 'Styx.CiInt'
 ```
 
 ```powershell
-Enable-ScheduledTask -TaskName 'Styx.CicdInt'
+Enable-ScheduledTask -TaskName 'Styx.CiInt'
 ```
 
 Lancer un passage à la main (tâche désactivée, pour voir le déroulé dans la console) :
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\ci-int.ps1
 ```
 
 ### Renouveler le jeton GitLab
@@ -160,7 +162,7 @@ Modifier la valeur de la variable `ARTIFACTORY_API_KEY` dans **Settings > CI/CD 
 | `Push échoué (code 1)` | clé refusée, ou version déjà présente (409) | lire le journal du push ; renouveler la clé ; republier (§ 7) |
 | `… interrompu après 30 min` | build trop long ou bloqué | augmenter `BuildTimeoutMinutes`, ou chercher le blocage dans le journal |
 | `Journal non déposé dans GitLab` | dépôt de fichier refusé | sans effet sur le résultat ; le journal reste sur la machine |
-| Plus aucune ligne dans le journal du jour | tâche désactivée, ou machine arrêtée | `Get-ScheduledTask -TaskName 'Styx.CicdInt'` ; relancer `install-task.ps1` |
+| Plus aucune ligne dans le journal du jour | tâche désactivée, ou machine arrêtée | `Get-ScheduledTask -TaskName 'Styx.CiInt'` ; relancer `install-task.ps1` |
 | Une fenêtre s'ouvre chaque minute | tâche créée sans `conhost --headless` | relancer `install-task.ps1` |
 
 ## 9. Limites connues

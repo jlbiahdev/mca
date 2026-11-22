@@ -1,6 +1,6 @@
 # DevOps Styx
 
-Scripts PowerShell pour compiler, lancer, packager et publier Styx, sur le poste du développeur comme sur la machine d'intégration. Ils remplacent les runners GitLab, dont la création est bloquée sur l'instance.
+Scripts PowerShell pour compiler, lancer, packager, publier et déployer Styx, sur le poste du développeur comme sur la machine d'intégration. Ils remplacent les runners GitLab, dont la création est bloquée sur l'instance.
 
 Tous les scripts demandent **Windows PowerShell 5.1** et doivent être enregistrés en **UTF-8 avec BOM** (sinon les accents sont corrompus et certains scripts refusent de démarrer : voir `repair_utf8_bom.ps1`).
 
@@ -10,15 +10,17 @@ Tous les scripts demandent **Windows PowerShell 5.1** et doivent être enregistr
 devops/
 ├── dev/        poste du développeur : build, lancement, arrêt, package, push
 ├── int/        intégration : build, package et push, sans git
-├── cicd/       runner CI/CD d'intégration, téléchargement et déploiement sur les serveurs
-│   ├── 02_download_deploy/   téléchargement du package depuis Artifactory et déploiement
-│   ├── 03_deploy/            déploiement des applications
-│   └── tests_download_deploy/ tests de download_deploy, par jalons
+├── cicd/
+│   ├── ci/     runner d'intégration : build des MR, package et publication sur Artifactory
+│   └── cd/     téléchargement du package et déploiement sur les serveurs
+│       ├── 02_download_deploy/
+│       ├── 03_deploy/
+│       └── tests_download_deploy/
 ├── config/     configuration par environnement (dev.psd1, int.psd1)
 ├── modules/    fonctions communes (StyxBuild, Styx.Processes)
 ├── README.md   ce document
-├── runner.md   runner CI/CD : fonctionnement et exploitation
-├── HOWTO.md    runner CI/CD : mise en place sur un autre projet
+├── runner.md   runner CI : fonctionnement et exploitation
+├── HOWTO.md    runner CI : mise en place sur un autre projet
 ├── env.example.ps1
 ├── mytree.ps1
 └── repair_utf8_bom.ps1
@@ -28,7 +30,8 @@ devops/
 |---|---|---|
 | `dev/` | développeur, sur son poste | `dev/README.md` |
 | `int/` | appelé par le runner sur la machine d'intégration | ci-dessous |
-| `cicd/` | équipe qui exploite le runner ou déploie sur les serveurs | `runner.md`, `HOWTO.md`, et le README de chaque sous-dossier |
+| `cicd/ci/` | équipe qui exploite ou installe le runner | `runner.md`, `HOWTO.md` |
+| `cicd/cd/` | équipe qui déploie sur les serveurs | le README de chaque sous-dossier |
 | `config/` | tous | ci-dessous |
 | `modules/` | utilisé par les scripts, pas lancé directement | ci-dessous |
 
@@ -39,7 +42,7 @@ devops/
 | Où | poste du développeur | machine d'intégration |
 | Sources | dépôt git cloné ; la racine est trouvée par git | sources téléchargées par le runner, sans git (`-RepositoryRoot` obligatoire) |
 | Configuration du build | Debug ou Release, au choix | toujours Release |
-| Lancé par | le développeur | le runner `cicd-int` |
+| Lancé par | le développeur | le runner `ci-int` |
 
 Chaque environnement a son fichier dans `config/` : hôte et ports, configuration .NET (configuration, runtime, self-contained), dossiers de travail, partage, Artifactory, variables transmises aux applications. **Ces fichiers ne contiennent aucun secret** : ils indiquent seulement le **nom** des variables d'environnement qui portent les secrets (chaîne de connexion, clé Artifactory).
 
@@ -72,24 +75,26 @@ Exemple, à la main sur la machine d'intégration :
 .\int\build.ps1 -RepositoryRoot D:\ci\build
 ```
 
-## `cicd/` — le runner d'intégration
+## `cicd/ci/` — le runner d'intégration (CI)
 
-Le runner `cicd-int` est lancé chaque minute par une tâche planifiée sur la machine d'intégration :
+Le runner `ci-int` est lancé chaque minute par une tâche planifiée sur la machine d'intégration :
 
-- **CI** : chaque nouveau commit de merge request est compilé (`int/build.ps1`) ; le résultat s'affiche dans la MR (statut `ci-int`), avec le journal et, en cas d'échec, un commentaire listant les erreurs ;
-- **CD** : chaque nouveau commit de `main` est packagé (`int/package.ps1`) et poussé sur Artifactory (`int/push-artifactory.ps1`), en version `1.0.<numéro du pipeline GitLab>` (statut `cd-int`).
+- **merge requests** : chaque nouveau commit est compilé (`int/build.ps1`) ; le résultat s'affiche dans la MR (statut `ci-int`), avec le journal et, en cas d'échec, un commentaire listant les erreurs ;
+- **publication** : chaque nouveau commit de `main` est packagé (`int/package.ps1`) et poussé sur Artifactory (`int/push-artifactory.ps1`), en version `1.0.<numéro du pipeline GitLab>` (statut `ci-int-publish`).
 
-| Script | Rôle |
+Publier le package fait partie de l'intégration : le runner produit l'artefact, il ne déploie rien.
+
+| Fichier | Rôle |
 |---|---|
-| `cicd-int-poc.ps1`, `cicd-int-poc.psd1` | le runner et sa configuration |
-| `install-task.ps1` | création de la tâche planifiée `Styx.CicdInt` |
+| `ci-int.ps1`, `ci-int.psd1` | le runner et sa configuration |
+| `install-task.ps1` | création de la tâche planifiée `Styx.CiInt` |
 | `protect-token.ps1` | chiffrement du jeton GitLab sur la machine |
 | `diag-token.ps1` | diagnostic du jeton chiffré |
 | `gitlab-token.dat` | jeton GitLab chiffré par `protect-token.ps1` |
 
 Le dossier contient le runner tel qu'il est installé et s'utilise tel quel. Fonctionnement, exploitation et dépannage : `runner.md`. Installation sur un autre projet : `HOWTO.md`.
 
-### Téléchargement et déploiement sur les serveurs
+## `cicd/cd/` — le déploiement (CD)
 
 | Dossier | Contenu |
 |---|---|
@@ -97,7 +102,7 @@ Le dossier contient le runner tel qu'il est installé et s'utilise tel quel. Fon
 | `03_deploy/` | `deploy.ps1` et les scripts par application ; voir son `README.md` |
 | `tests_download_deploy/` | scénarios de test de `download_deploy.ps1`, rangés par jalon (`jalon_0` à `jalon_19`), lancés par `run_jalon.ps1` ; outils communs dans `_common` et `_tools` ; voir son `README.md` |
 
-Le téléchargement s'authentifie sur Artifactory avec `ARTIFACTORY_USERNAME` et `ARTIFACTORY_TOKEN` ; le push du runner utilise une clé d'API distincte. Le déploiement n'est pas automatisé par le runner.
+Le téléchargement s'authentifie sur Artifactory avec `ARTIFACTORY_USERNAME` et `ARTIFACTORY_TOKEN` ; le push du runner CI utilise une clé d'API distincte. Le déploiement n'est pas encore automatisé.
 
 ## `modules/`
 
