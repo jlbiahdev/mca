@@ -635,7 +635,7 @@ Fermer la MR de test (**Close merge request**) et supprimer sa branche.
    | Champ | Valeur |
    |---|---|
    | Type | `Variable (default)` |
-   | Environments | voir ci-dessous |
+   | Environments | `All (default)` (`*`) : une seule clé, lue par le runner sans filtre d'environnement |
    | Visibility | `Masked` : la valeur n'apparaît pas dans les journaux. Pas `Masked and hidden` : la valeur ne pourrait plus être vérifiée dans l'interface, et l'API pourrait ne plus la renvoyer au runner |
    | Protect variable | décoché : ne concerne que les pipelines GitLab, sans effet sur le runner |
    | Expand variable reference | décoché : un `$` dans la clé serait interprété comme une référence à une autre variable |
