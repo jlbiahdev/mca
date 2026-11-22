@@ -34,6 +34,7 @@ Chaque user story ajoute une seule chose à la précédente et se teste seule. L
 | 7 | Statut dans GitLab | publier « en cours », puis « réussi » ou « échoué » |
 | 8 | Build en échec et erreurs du runner | signaler un échec avec son journal, reprendre après une erreur du runner |
 | 9 | Documentation | — (README : fonctionnement ; How-to : mise en place pour une autre équipe) |
+| 10 | Publication sur Artifactory (CD) | packager et publier chaque nouveau commit de `main`, sous le nom `cicd-int-poc` (réalisée avant l'US 9) |
 
 Dossiers sur la machine de POC :
 
@@ -596,6 +597,108 @@ Le jeton de l'US 7 (scope `api`, rôle Developer) suffit pour déposer un fichie
 Fermer la MR de test (**Close merge request**) et supprimer sa branche.
 
 **Dépendances** : US 7.
+
+## US 10 — Publication sur Artifactory (CD)
+
+**Contexte** : la CI valide les MR. Il reste à produire la version publiée : après chaque merge dans `main`, le runner génère le package et le pousse sur Artifactory. Cette US reprend l'US 4.1 de l'Epic CI/CD (package et publication) et applique le résultat de l'US 4.2 (version issue du pipeline externe, validée à l'US 7). Le déploiement reste hors périmètre.
+
+**Décisions** :
+
+- **Un seul runner pour la CI et la CD** : le même script fait les deux à chaque passage. Il est renommé `cicd-int-poc` (configuration, tâche `Styx.CicdIntPoc`, journaux), et les statuts deviennent `ci-int` (MR) et `cd-int` (`main`).
+- **Version** : `1.0.<numéro du pipeline externe>` (clé `VersionFormat`), unique et croissante ; depuis une version, on retrouve son pipeline et son commit dans GitLab.
+- **Clé Artifactory dans une variable GitLab** : une seule mise à jour à chaque renouvellement de la clé, quel que soit le nombre de machines. La lecture d'une variable par l'API demande le rôle **Maintainer** pour le jeton du runner. Le jeton reste chiffré sur la machine du runner, lisible seulement par SYSTEM, les administrateurs et le compte du runner, et a une date d'expiration.
+- **Scripts d'intégration** : comme `int/build.ps1`, le package et le push ont leur version d'intégration, sans git : `int/package.ps1` (dérivé de `dev/generate_package.ps1`, version et dossier de sortie en paramètres) et `int/push-artifactory.ps1` (configuration lue dans `config\int.psd1`).
+- L'entropie du chiffrement du jeton garde son nom historique (`Styx.CiDev`) : la changer obligerait à rechiffrer le jeton.
+
+**Code** : étape US 10 (`us-10.md` : runner, configuration, `install-task.ps1`, `diag-token.ps1` ; `us-10-scripts.md` : scripts du dépôt). À chaque passage, après la CI :
+
+- le runner lit le dernier commit de `main` ; s'il n'est pas dans `processed-cd.txt`, il publie le statut `cd-int` « en cours » et en déduit la version ;
+- il lit la clé Artifactory (variable GitLab), télécharge les sources, lance `int/package.ps1` puis `int/push-artifactory.ps1`, en transmettant la clé par l'environnement du processus (jamais en ligne de commande ni dans un fichier) ;
+- il dépose les journaux du package et du push dans GitLab, publie « réussi » ou « échoué », et note le commit dans `processed-cd.txt` ;
+- une erreur du runner (variable illisible, téléchargement impossible) publie « échoué » sans noter le commit : il est repris au passage suivant. La clé est lue avant le téléchargement, pour ne pas télécharger à chaque passage si elle est inaccessible ;
+- une erreur de la CI n'empêche pas la CD, et inversement.
+
+### Dans GitLab
+
+1. **Nouveau jeton** : **Settings > Access tokens > Add new token**, avec les mêmes valeurs qu'à l'US 7, sauf :
+
+   | Champ | Valeur |
+   |---|---|
+   | Token name | `cicd-int-poc-api` |
+   | Select a role | **Maintainer** (nécessaire pour lire la variable de la clé Artifactory) |
+   | Select scopes | `api` |
+
+   Copier le jeton (il ne sera plus affiché).
+
+2. **Variable de la clé Artifactory** : **Settings > CI/CD > Variables > Add variable** :
+
+   | Champ | Valeur |
+   |---|---|
+   | Key | `ARTIFACTORY_API_KEY` (même nom que `Artifactory.ApiKeyVariable` dans `config\int.psd1`) |
+   | Value | la clé Artifactory |
+   | Mask variable | coché |
+   | Protect variable | décoché |
+
+3. **Dépôt** : par une MR, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Fusionner cette MR **avant** d'installer le code de l'US 10 : le premier passage du nouveau runner publiera ce commit de `main`.
+
+### Sur la machine de POC
+
+1. Supprimer l'ancienne tâche :
+
+   ```powershell
+   Unregister-ScheduledTask -TaskName 'Styx.CiDev' -Confirm:$false
+   ```
+
+2. Dans `D:\ci\runner`, créer `cicd-int-poc.ps1`, `cicd-int-poc.psd1`, et remplacer `install-task.ps1` et `diag-token.ps1` par ceux de `us-10.md`. Reporter `GitLabUrl` et `ProjectId` dans `cicd-int-poc.psd1`. Supprimer `ci-dev.ps1` et `ci-dev.psd1`. `processed.txt` est conservé : les commits de MR déjà traités ne sont pas recompilés.
+3. Enregistrer les fichiers en UTF-8 avec BOM (même commande qu'aux US précédentes, sur ces quatre fichiers).
+4. Chiffrer le nouveau jeton à la place de l'ancien :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\protect-token.ps1
+   ```
+
+5. Lancer le runner une fois à la main :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int-poc.ps1
+   ```
+
+   Résultat attendu : `Branche main : commit <commit> à publier`, `Pipeline externe GitLab : <n>, version 1.0.<n>`, les étapes Package et Push, puis `Branche main : version 1.0.<n> publiée sur Artifactory`.
+
+6. Installer la tâche :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\install-task.ps1
+   ```
+
+   Résultat attendu : la tâche `Styx.CicdIntPoc`. Au passage suivant, le journal du jour (`logs\cicd-int-poc-<date>.log`) indique `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
+
+7. Dans GitLab, révoquer l'ancien jeton `ci-int-poc-api`.
+
+### Vérifications
+
+1. Page du commit de `main` (ou **Build > Pipelines**) : statut `cd-int` « réussi », description `Version 1.0.<n> publiée sur Artifactory en <durée> sur <machine>. Commit de <auteur>.` ; un clic sur le job ouvre les journaux du package et du push.
+2. Artifactory : le package `Styx.Publish` en version `1.0.<n>` est présent.
+3. `D:\ci\runner\processed-cd.txt` contient le commit, `main 1.0.<n>` et `success`.
+4. Aucune trace de la clé : rechercher ses premiers caractères dans `logs\` et `builds\` ne donne rien ; le journal du push affiche `--api-key ***`.
+5. Fusionner une MR : au passage suivant, une nouvelle version, plus grande, est publiée.
+6. Les MR continuent d'afficher leur statut, désormais nommé `ci-int`.
+7. **Clé invalide** : remplacer temporairement la valeur de la variable GitLab par une valeur fausse, fusionner une MR : le statut `cd-int` passe à « échoué » (`Push échoué`), le journal du push indique le refus d'Artifactory. Remettre la bonne clé.
+
+**Fini quand** :
+
+- chaque merge dans `main` produit, sans intervention, une version publiée sur Artifactory ;
+- la version se relie à son pipeline et à son commit dans GitLab ;
+- la clé Artifactory n'apparaît dans aucun fichier, journal ni console de la machine ;
+- l'US 4.2 de l'Epic CI/CD est close avec le format retenu (`1.0.<pipeline>`).
+
+**Limites connues** :
+
+- un package ou un push en échec n'est pas retenté : le commit est noté. Pour republier ce commit (après le renouvellement d'une clé expirée, par exemple), supprimer sa ligne de `processed-cd.txt`, ou fusionner un nouveau commit dans `main` ;
+- si un push a réussi mais que la publication du statut a échoué ensuite, le commit est repris et son push échoue avec un conflit (409) : la version est déjà sur Artifactory ;
+- comme pour la CI, chaque publication dépose ses journaux dans le projet GitLab.
+
+**Dépendances** : US 8.
 
 ## US 9 — Documentation
 
