@@ -238,7 +238,7 @@ catch {
 
 ## protect-token.ps1
 
-Nouveau à cette US : chiffre le jeton GitLab au niveau de la machine et limite la lecture du fichier à SYSTEM, aux administrateurs et au compte du runner. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM ; il ne change plus aux US suivantes (il sert aussi à renouveler le jeton).
+Nouveau à cette US : chiffre le jeton GitLab au niveau de la machine et limite la lecture du fichier à SYSTEM, aux administrateurs et au compte du runner. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM ; il ne change plus aux US suivantes (il sert aussi à renouveler le jeton). L'option `-FromClixml <fichier>` reprend le jeton d'un fichier créé par `Export-Clixml`, sans le recoller.
 
 ```powershell
 #requires -Version 5.1
@@ -270,8 +270,16 @@ Nouveau à cette US : chiffre le jeton GitLab au niveau de la machine et limite 
     Compte du runner, autorisé à lire le fichier. Par défaut : le compte qui
     lance ce script.
 
+.PARAMETER FromClixml
+    Lit le jeton dans un fichier créé par Export-Clixml (ancien format, chiffré
+    au niveau du compte) au lieu de le demander. À lancer avec le compte qui a
+    créé ce fichier.
+
 .EXAMPLE
     .\protect-token.ps1
+
+.EXAMPLE
+    .\protect-token.ps1 -FromClixml D:\ci\runner\gitlab-token.xml
 
 .NOTES
     Code de sortie : 0 succès, 1 erreur.
@@ -280,7 +288,9 @@ Nouveau à cette US : chiffre le jeton GitLab au niveau de la machine et limite 
 param(
     [string] $Path,
 
-    [string] $Account
+    [string] $Account,
+
+    [string] $FromClixml
 )
 
 Set-StrictMode -Version Latest
@@ -307,7 +317,18 @@ try {
         throw "Compte introuvable : $Account"
     }
 
-    $secureToken = Read-Host 'Jeton GitLab' -AsSecureString
+    if ([string]::IsNullOrWhiteSpace($FromClixml)) {
+        $secureToken = Read-Host 'Jeton GitLab' -AsSecureString
+    }
+    else {
+        try {
+            $secureToken = Import-Clixml -LiteralPath $FromClixml
+        }
+        catch {
+            throw "Lecture impossible de $FromClixml : le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
+        }
+    }
+
     $token = [Net.NetworkCredential]::new('', $secureToken).Password
 
     if ([string]::IsNullOrWhiteSpace($token)) {
