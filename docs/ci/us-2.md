@@ -13,9 +13,9 @@ Ticket : voir `epic.md`, US 2. Copier les fichiers dans `D:\ci\runner`, en **UTF
     # Identifiant numérique du projet (page d'accueil du projet, menu « ⋮ »).
     ProjectId  = 0
 
-    # Jeton GitLab chiffré par protect-token.ps1 (DPAPI, niveau machine) ;
-    # lecture limitée à SYSTEM, aux administrateurs et au compte du runner.
-    TokenFile  = 'D:\ci\runner\gitlab-token.dat'
+    # Jeton GitLab chiffré par Windows (DPAPI) : lisible uniquement par le
+    # compte qui l'a créé, sur cette machine.
+    TokenFile  = 'D:\ci\runner\gitlab-token.xml'
 
     # ── Runner ──────────────────────────────────────────────────────────────
     # Dossier du runner : script, configuration, journaux, commits traités.
@@ -135,40 +135,21 @@ function Initialize-CiLog {
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
 
-# Le jeton est chiffré par protect-token.ps1 au niveau de la machine (DPAPI),
-# ce qui permet à la tâche de le lire sans session ouverte ni mot de passe
-# enregistré. Les droits du fichier limitent sa lecture au compte du runner.
 function Get-GitLabToken {
     $path = $script:Config.TokenFile
 
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Fichier du jeton GitLab introuvable : $path (le créer avec protect-token.ps1)"
+        throw "Fichier du jeton GitLab introuvable : $path"
     }
 
     try {
-        $encoded = (Get-Content -LiteralPath $path -Raw -Encoding ASCII).Trim()
+        $secureToken = Import-Clixml -LiteralPath $path
     }
     catch {
-        throw "Lecture du jeton GitLab refusée ($path) : le compte qui lance ce script doit être autorisé par protect-token.ps1."
+        throw "Impossible de déchiffrer le jeton GitLab. Le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
     }
 
-    try {
-        Add-Type -AssemblyName System.Security
-        $entropy   = [Text.Encoding]::UTF8.GetBytes('Styx.CiDev')
-        $encrypted = [Convert]::FromBase64String($encoded)
-        $plain     = [Security.Cryptography.ProtectedData]::Unprotect(
-            $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-    }
-    catch {
-        throw "Impossible de déchiffrer le jeton GitLab ($path) : le recréer avec protect-token.ps1 sur cette machine."
-    }
-
-    try {
-        return [Text.Encoding]::UTF8.GetString($plain)
-    }
-    finally {
-        [Array]::Clear($plain, 0, $plain.Length)
-    }
+    return [Net.NetworkCredential]::new('', $secureToken).Password
 }
 
 function Invoke-GitLabApi {
@@ -272,7 +253,7 @@ finally {
 
 ## install-task.ps1
 
-Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM ; il ne change plus aux US suivantes.
+Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM.
 
 ```powershell
 #requires -Version 5.1
@@ -282,15 +263,15 @@ Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi d
     Crée, ou remplace, la tâche planifiée qui lance le runner CI chaque minute.
 
 .DESCRIPTION
-    La tâche tourne avec le compte qui lance ce script.
+    La tâche tourne avec le compte qui lance ce script : c'est lui qui a
+    chiffré le jeton GitLab, et lui seul peut le relire.
 
-    Par défaut, elle tourne que la session de ce compte soit ouverte ou non,
-    y compris après un redémarrage, sans enregistrer de mot de passe (option
-    « Do not store password » du Planificateur). Le jeton GitLab doit alors
-    être chiffré au niveau de la machine par protect-token.ps1.
+    Par défaut, la tâche tourne seulement quand la session de ce compte est
+    ouverte (même verrouillée) : aucun mot de passe n'est enregistré.
 
-    Avec -InteractiveOnly, elle ne tourne que lorsque la session du compte est
-    ouverte (même verrouillée).
+    Avec -RunWhenLoggedOff, elle tourne aussi session fermée : le mot de passe
+    du compte est demandé et enregistré par Windows. Une stratégie de
+    l'entreprise peut l'interdire (erreur 0x80070520).
 
     La tâche tourne avec les privilèges les plus élevés du compte : un compte
     administrateur garde ses droits d'écriture sur les dossiers du runner,
@@ -312,17 +293,16 @@ Nouveau à cette US : crée la tâche planifiée `Styx.CiDev`. À copier aussi d
 .PARAMETER ExecutionTimeLimitHours
     Durée au-delà de laquelle Windows arrête un passage. Par défaut : 2.
 
-.PARAMETER InteractiveOnly
-    La tâche ne tourne que lorsque la session du compte est ouverte.
+.PARAMETER RunWhenLoggedOff
+    La tâche tourne aussi session fermée (mot de passe enregistré).
 
 .EXAMPLE
     .\install-task.ps1
 
 .EXAMPLE
-    .\install-task.ps1 -InteractiveOnly
+    .\install-task.ps1 -RunWhenLoggedOff
 
 .NOTES
-    À lancer depuis une console administrateur.
     Code de sortie : 0 succès, 1 erreur.
 #>
 [CmdletBinding()]
@@ -337,7 +317,7 @@ param(
     [ValidateRange(1, 24)]
     [int] $ExecutionTimeLimitHours = 2,
 
-    [switch] $InteractiveOnly
+    [switch] $RunWhenLoggedOff
 )
 
 Set-StrictMode -Version Latest
@@ -377,28 +357,46 @@ try {
         -StartWhenAvailable `
         -ExecutionTimeLimit (New-TimeSpan -Hours $ExecutionTimeLimitHours)
 
-    if ($InteractiveOnly) {
-        $logonType = 'Interactive'
-        $mode      = 'seulement quand la session de ce compte est ouverte (même verrouillée)'
+    if ($RunWhenLoggedOff) {
+        $securePassword = Read-Host "Mot de passe de $user" -AsSecureString
+        $password = [Net.NetworkCredential]::new('', $securePassword).Password
+
+        try {
+            Register-ScheduledTask `
+                -TaskName $TaskName `
+                -Action $action `
+                -Trigger $trigger `
+                -Settings $settings `
+                -User $user `
+                -Password $password `
+                -RunLevel Highest `
+                -Force | Out-Null
+        }
+        catch {
+            throw (
+                "Création de la tâche refusée : $($_.Exception.Message)" + [Environment]::NewLine +
+                "Avec le code 0x80070520, une stratégie interdit d'enregistrer le mot de passe : relancer sans -RunWhenLoggedOff."
+            )
+        }
+        finally {
+            $password = $null
+        }
+
+        $mode = 'session ouverte ou fermée (mot de passe enregistré par Windows)'
     }
     else {
-        # S4U : la tâche tourne sans session ouverte et sans mot de passe
-        # enregistré ; elle n'accède pas aux ressources réseau authentifiées
-        # par le compte Windows (partages, proxy NTLM), ce qui ne gêne pas
-        # les appels à l'API GitLab, authentifiés par le jeton.
-        $logonType = 'S4U'
-        $mode      = 'session ouverte ou fermée, sans mot de passe enregistré'
+        $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
+
+        Register-ScheduledTask `
+            -TaskName $TaskName `
+            -Action $action `
+            -Trigger $trigger `
+            -Settings $settings `
+            -Principal $principal `
+            -Force | Out-Null
+
+        $mode = 'seulement quand la session de ce compte est ouverte (même verrouillée)'
     }
-
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType $logonType -RunLevel Highest
-
-    Register-ScheduledTask `
-        -TaskName $TaskName `
-        -Action $action `
-        -Trigger $trigger `
-        -Settings $settings `
-        -Principal $principal `
-        -Force | Out-Null
 
     $task = Get-ScheduledTask -TaskName $TaskName
 

@@ -343,3 +343,298 @@ finally {
     if ($lock) { $lock.Dispose() }
 }
 ```
+
+## protect-token.ps1
+
+Nouveau à cette US (voir `commentaire-us4.md`) : chiffre le jeton GitLab au niveau de la machine dans `gitlab-token.dat` et limite la lecture du fichier à SYSTEM, aux administrateurs et au compte du runner. L'option `-FromClixml <fichier>` reprend le jeton d'un fichier créé par `Export-Clixml`, sans le recoller.
+
+```powershell
+#requires -Version 5.1
+
+<#
+.SYNOPSIS
+    Chiffre le jeton GitLab du runner et restreint l'accès au fichier.
+
+.DESCRIPTION
+    Le jeton est demandé à l'invite (rien ne s'affiche) puis chiffré par
+    Windows (DPAPI) au niveau de la MACHINE : la tâche planifiée peut le
+    déchiffrer même quand aucune session n'est ouverte et sans mot de passe
+    enregistré.
+
+    Un jeton chiffré au niveau de la machine peut être déchiffré par tout
+    compte capable de LIRE le fichier. Le script retire donc tous les droits
+    hérités et n'autorise que trois comptes :
+    - SYSTEM ;
+    - le groupe Administrateurs ;
+    - le compte du runner (par défaut, celui qui lance ce script).
+
+    Un fichier existant est remplacé (renouvellement du jeton).
+
+.PARAMETER Path
+    Fichier du jeton chiffré. Par défaut : gitlab-token.dat, à côté de ce
+    script.
+
+.PARAMETER Account
+    Compte du runner, autorisé à lire le fichier. Par défaut : le compte qui
+    lance ce script.
+
+.PARAMETER FromClixml
+    Lit le jeton dans un fichier créé par Export-Clixml (ancien format, chiffré
+    au niveau du compte) au lieu de le demander. À lancer avec le compte qui a
+    créé ce fichier.
+
+.EXAMPLE
+    .\protect-token.ps1
+
+.EXAMPLE
+    .\protect-token.ps1 -FromClixml D:\ci\runner\gitlab-token.xml
+
+.NOTES
+    Code de sortie : 0 succès, 1 erreur.
+#>
+[CmdletBinding()]
+param(
+    [string] $Path,
+
+    [string] $Account,
+
+    [string] $FromClixml
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+try {
+    # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par
+    # défaut du bloc param() : les valeurs par défaut sont calculées ici.
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        $Path = Join-Path $PSScriptRoot 'gitlab-token.dat'
+    }
+
+    if ([string]::IsNullOrWhiteSpace($Account)) {
+        $Account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    }
+
+    $Path = [IO.Path]::GetFullPath($Path)
+
+    # Vérifie que le compte existe avant de toucher au fichier.
+    try {
+        $accountSid = ([Security.Principal.NTAccount] $Account).Translate([Security.Principal.SecurityIdentifier])
+    }
+    catch {
+        throw "Compte introuvable : $Account"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($FromClixml)) {
+        $secureToken = Read-Host 'Jeton GitLab' -AsSecureString
+    }
+    else {
+        try {
+            $secureToken = Import-Clixml -LiteralPath $FromClixml
+        }
+        catch {
+            throw "Lecture impossible de $FromClixml : le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
+        }
+    }
+
+    $token = [Net.NetworkCredential]::new('', $secureToken).Password
+
+    if ([string]::IsNullOrWhiteSpace($token)) {
+        throw 'Aucun jeton saisi.'
+    }
+
+    Add-Type -AssemblyName System.Security
+
+    # L'entropie lie le chiffrement à cet usage : un autre outil qui déchiffre
+    # des données DPAPI de la machine ne lit pas ce fichier sans la connaître.
+    $entropy   = [Text.Encoding]::UTF8.GetBytes('Styx.CiDev')
+    $plain     = [Text.Encoding]::UTF8.GetBytes($token)
+    $encrypted = [Security.Cryptography.ProtectedData]::Protect(
+        $plain, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+
+    [Array]::Clear($plain, 0, $plain.Length)
+    $token = $null
+
+    Set-Content -LiteralPath $Path -Value ([Convert]::ToBase64String($encrypted)) -Encoding ASCII
+
+    # Droits : uniquement SYSTEM, Administrateurs et le compte du runner.
+    $acl = Get-Acl -LiteralPath $Path
+    $acl.SetAccessRuleProtection($true, $false)
+
+    foreach ($rule in @($acl.Access)) {
+        [void] $acl.RemoveAccessRuleSpecific($rule)
+    }
+
+    $allowed = @(
+        [Security.Principal.SecurityIdentifier] 'S-1-5-18',      # SYSTEM
+        [Security.Principal.SecurityIdentifier] 'S-1-5-32-544',  # Administrateurs
+        $accountSid
+    )
+
+    foreach ($sid in $allowed) {
+        $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+
+    Set-Acl -LiteralPath $Path -AclObject $acl
+
+    Write-Host ''
+    Write-Host "Jeton chiffré dans $Path" -ForegroundColor Green
+    Write-Host "  Lecture autorisée : SYSTEM, Administrateurs, $Account"
+    Write-Host ''
+
+    exit 0
+}
+catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit 1
+}
+```
+
+## install-task.ps1
+
+Modifié à cette US : la tâche tourne par défaut sans session ouverte ni mot de passe enregistré ; l'option `-InteractiveOnly` garde le mode session ouverte. Relancer le script pour remplacer la tâche.
+
+```powershell
+#requires -Version 5.1
+
+<#
+.SYNOPSIS
+    Crée, ou remplace, la tâche planifiée qui lance le runner CI chaque minute.
+
+.DESCRIPTION
+    La tâche tourne avec le compte qui lance ce script.
+
+    Par défaut, elle tourne que la session de ce compte soit ouverte ou non,
+    y compris après un redémarrage, sans enregistrer de mot de passe (option
+    « Do not store password » du Planificateur). Le jeton GitLab doit alors
+    être chiffré au niveau de la machine par protect-token.ps1.
+
+    Avec -InteractiveOnly, elle ne tourne que lorsque la session du compte est
+    ouverte (même verrouillée).
+
+    La tâche tourne avec les privilèges les plus élevés du compte : un compte
+    administrateur garde ses droits d'écriture sur les dossiers du runner,
+    créés depuis une console administrateur. PowerShell est lancé sans
+    console (conhost.exe --headless) : aucune fenêtre ne s'affiche.
+
+    Si la tâche existe déjà, elle est remplacée ; en cas d'échec, l'ancienne
+    tâche est conservée.
+
+.PARAMETER TaskName
+    Nom de la tâche. Par défaut : Styx.CiDev.
+
+.PARAMETER ScriptPath
+    Script du runner. Par défaut : ci-dev.ps1, à côté de ce script.
+
+.PARAMETER IntervalMinutes
+    Intervalle entre deux lancements, en minutes. Par défaut : 1.
+
+.PARAMETER ExecutionTimeLimitHours
+    Durée au-delà de laquelle Windows arrête un passage. Par défaut : 2.
+
+.PARAMETER InteractiveOnly
+    La tâche ne tourne que lorsque la session du compte est ouverte.
+
+.EXAMPLE
+    .\install-task.ps1
+
+.EXAMPLE
+    .\install-task.ps1 -InteractiveOnly
+
+.NOTES
+    À lancer depuis une console administrateur.
+    Code de sortie : 0 succès, 1 erreur.
+#>
+[CmdletBinding()]
+param(
+    [string] $TaskName = 'Styx.CiDev',
+
+    [string] $ScriptPath,
+
+    [ValidateRange(1, 60)]
+    [int] $IntervalMinutes = 1,
+
+    [ValidateRange(1, 24)]
+    [int] $ExecutionTimeLimitHours = 2,
+
+    [switch] $InteractiveOnly
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+
+try {
+    # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par
+    # défaut du bloc param() : le chemin par défaut est donc calculé ici.
+    if ([string]::IsNullOrWhiteSpace($ScriptPath)) {
+        $ScriptPath = Join-Path $PSScriptRoot 'ci-dev.ps1'
+    }
+
+    if (-not (Test-Path -LiteralPath $ScriptPath -PathType Leaf)) {
+        throw "Script du runner introuvable : $ScriptPath"
+    }
+
+    $ScriptPath       = (Resolve-Path -LiteralPath $ScriptPath).Path
+    $workingDirectory = Split-Path -Parent $ScriptPath
+    $user             = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    # conhost.exe --headless lance PowerShell sans console : aucune fenêtre ne
+    # s'affiche, même brièvement (-WindowStyle Hidden laisse un clignotement).
+    $action = New-ScheduledTaskAction `
+        -Execute 'conhost.exe' `
+        -Argument ('--headless powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}"' -f $ScriptPath) `
+        -WorkingDirectory $workingDirectory
+
+    # Répétition sans fin, à partir de minuit aujourd'hui.
+    $trigger = New-ScheduledTaskTrigger `
+        -Once `
+        -At (Get-Date).Date `
+        -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)
+
+    # Pas de second lancement si le précédent tourne encore.
+    $settings = New-ScheduledTaskSettingsSet `
+        -MultipleInstances IgnoreNew `
+        -StartWhenAvailable `
+        -ExecutionTimeLimit (New-TimeSpan -Hours $ExecutionTimeLimitHours)
+
+    if ($InteractiveOnly) {
+        $logonType = 'Interactive'
+        $mode      = 'seulement quand la session de ce compte est ouverte (même verrouillée)'
+    }
+    else {
+        # S4U : la tâche tourne sans session ouverte et sans mot de passe
+        # enregistré ; elle n'accède pas aux ressources réseau authentifiées
+        # par le compte Windows (partages, proxy NTLM), ce qui ne gêne pas
+        # les appels à l'API GitLab, authentifiés par le jeton.
+        $logonType = 'S4U'
+        $mode      = 'session ouverte ou fermée, sans mot de passe enregistré'
+    }
+
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType $logonType -RunLevel Highest
+
+    Register-ScheduledTask `
+        -TaskName $TaskName `
+        -Action $action `
+        -Trigger $trigger `
+        -Settings $settings `
+        -Principal $principal `
+        -Force | Out-Null
+
+    $task = Get-ScheduledTask -TaskName $TaskName
+
+    Write-Host ''
+    Write-Host "Tâche $TaskName créée, état : $($task.State)" -ForegroundColor Green
+    Write-Host "  Compte    : $user"
+    Write-Host "  Exécution : $mode"
+    Write-Host "  Script    : $ScriptPath"
+    Write-Host "  Fréquence : toutes les $IntervalMinutes minute(s)"
+    Write-Host ''
+
+    exit 0
+}
+catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    exit 1
+}
+```

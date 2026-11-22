@@ -13,9 +13,9 @@ Ticket : voir `epic.md`, US 1. Copier les fichiers dans `D:\ci\runner`, en **UTF
     # Identifiant numérique du projet (page d'accueil du projet, menu « ⋮ »).
     ProjectId  = 0
 
-    # Jeton GitLab chiffré par protect-token.ps1 (DPAPI, niveau machine) ;
-    # lecture limitée à SYSTEM, aux administrateurs et au compte du runner.
-    TokenFile  = 'D:\ci\runner\gitlab-token.dat'
+    # Jeton GitLab chiffré par Windows (DPAPI) : lisible uniquement par le
+    # compte qui l'a créé, sur cette machine.
+    TokenFile  = 'D:\ci\runner\gitlab-token.xml'
 
     # ── Runner ──────────────────────────────────────────────────────────────
     # Dossier du runner : script, configuration, journaux, commits traités.
@@ -128,40 +128,21 @@ function Write-CiLog {
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
 
-# Le jeton est chiffré par protect-token.ps1 au niveau de la machine (DPAPI),
-# ce qui permet à la tâche de le lire sans session ouverte ni mot de passe
-# enregistré. Les droits du fichier limitent sa lecture au compte du runner.
 function Get-GitLabToken {
     $path = $script:Config.TokenFile
 
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Fichier du jeton GitLab introuvable : $path (le créer avec protect-token.ps1)"
+        throw "Fichier du jeton GitLab introuvable : $path"
     }
 
     try {
-        $encoded = (Get-Content -LiteralPath $path -Raw -Encoding ASCII).Trim()
+        $secureToken = Import-Clixml -LiteralPath $path
     }
     catch {
-        throw "Lecture du jeton GitLab refusée ($path) : le compte qui lance ce script doit être autorisé par protect-token.ps1."
+        throw "Impossible de déchiffrer le jeton GitLab. Le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
     }
 
-    try {
-        Add-Type -AssemblyName System.Security
-        $entropy   = [Text.Encoding]::UTF8.GetBytes('Styx.CiDev')
-        $encrypted = [Convert]::FromBase64String($encoded)
-        $plain     = [Security.Cryptography.ProtectedData]::Unprotect(
-            $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-    }
-    catch {
-        throw "Impossible de déchiffrer le jeton GitLab ($path) : le recréer avec protect-token.ps1 sur cette machine."
-    }
-
-    try {
-        return [Text.Encoding]::UTF8.GetString($plain)
-    }
-    finally {
-        [Array]::Clear($plain, 0, $plain.Length)
-    }
+    return [Net.NetworkCredential]::new('', $secureToken).Password
 }
 
 function Invoke-GitLabApi {
@@ -232,153 +213,6 @@ try {
 }
 catch {
     Write-CiLog $_.Exception.Message 'ERREUR'
-    exit 1
-}
-```
-
-## protect-token.ps1
-
-Nouveau à cette US : chiffre le jeton GitLab au niveau de la machine et limite la lecture du fichier à SYSTEM, aux administrateurs et au compte du runner. À copier aussi dans `D:\ci\runner`, en UTF-8 avec BOM ; il ne change plus aux US suivantes (il sert aussi à renouveler le jeton). L'option `-FromClixml <fichier>` reprend le jeton d'un fichier créé par `Export-Clixml`, sans le recoller.
-
-```powershell
-#requires -Version 5.1
-
-<#
-.SYNOPSIS
-    Chiffre le jeton GitLab du runner et restreint l'accès au fichier.
-
-.DESCRIPTION
-    Le jeton est demandé à l'invite (rien ne s'affiche) puis chiffré par
-    Windows (DPAPI) au niveau de la MACHINE : la tâche planifiée peut le
-    déchiffrer même quand aucune session n'est ouverte et sans mot de passe
-    enregistré.
-
-    Un jeton chiffré au niveau de la machine peut être déchiffré par tout
-    compte capable de LIRE le fichier. Le script retire donc tous les droits
-    hérités et n'autorise que trois comptes :
-    - SYSTEM ;
-    - le groupe Administrateurs ;
-    - le compte du runner (par défaut, celui qui lance ce script).
-
-    Un fichier existant est remplacé (renouvellement du jeton).
-
-.PARAMETER Path
-    Fichier du jeton chiffré. Par défaut : gitlab-token.dat, à côté de ce
-    script.
-
-.PARAMETER Account
-    Compte du runner, autorisé à lire le fichier. Par défaut : le compte qui
-    lance ce script.
-
-.PARAMETER FromClixml
-    Lit le jeton dans un fichier créé par Export-Clixml (ancien format, chiffré
-    au niveau du compte) au lieu de le demander. À lancer avec le compte qui a
-    créé ce fichier.
-
-.EXAMPLE
-    .\protect-token.ps1
-
-.EXAMPLE
-    .\protect-token.ps1 -FromClixml D:\ci\runner\gitlab-token.xml
-
-.NOTES
-    Code de sortie : 0 succès, 1 erreur.
-#>
-[CmdletBinding()]
-param(
-    [string] $Path,
-
-    [string] $Account,
-
-    [string] $FromClixml
-)
-
-Set-StrictMode -Version Latest
-$ErrorActionPreference = 'Stop'
-
-try {
-    # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par
-    # défaut du bloc param() : les valeurs par défaut sont calculées ici.
-    if ([string]::IsNullOrWhiteSpace($Path)) {
-        $Path = Join-Path $PSScriptRoot 'gitlab-token.dat'
-    }
-
-    if ([string]::IsNullOrWhiteSpace($Account)) {
-        $Account = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    }
-
-    $Path = [IO.Path]::GetFullPath($Path)
-
-    # Vérifie que le compte existe avant de toucher au fichier.
-    try {
-        $accountSid = ([Security.Principal.NTAccount] $Account).Translate([Security.Principal.SecurityIdentifier])
-    }
-    catch {
-        throw "Compte introuvable : $Account"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($FromClixml)) {
-        $secureToken = Read-Host 'Jeton GitLab' -AsSecureString
-    }
-    else {
-        try {
-            $secureToken = Import-Clixml -LiteralPath $FromClixml
-        }
-        catch {
-            throw "Lecture impossible de $FromClixml : le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
-        }
-    }
-
-    $token = [Net.NetworkCredential]::new('', $secureToken).Password
-
-    if ([string]::IsNullOrWhiteSpace($token)) {
-        throw 'Aucun jeton saisi.'
-    }
-
-    Add-Type -AssemblyName System.Security
-
-    # L'entropie lie le chiffrement à cet usage : un autre outil qui déchiffre
-    # des données DPAPI de la machine ne lit pas ce fichier sans la connaître.
-    $entropy   = [Text.Encoding]::UTF8.GetBytes('Styx.CiDev')
-    $plain     = [Text.Encoding]::UTF8.GetBytes($token)
-    $encrypted = [Security.Cryptography.ProtectedData]::Protect(
-        $plain, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
-
-    [Array]::Clear($plain, 0, $plain.Length)
-    $token = $null
-
-    Set-Content -LiteralPath $Path -Value ([Convert]::ToBase64String($encrypted)) -Encoding ASCII
-
-    # Droits : uniquement SYSTEM, Administrateurs et le compte du runner.
-    $acl = Get-Acl -LiteralPath $Path
-    $acl.SetAccessRuleProtection($true, $false)
-
-    foreach ($rule in @($acl.Access)) {
-        [void] $acl.RemoveAccessRuleSpecific($rule)
-    }
-
-    $allowed = @(
-        [Security.Principal.SecurityIdentifier] 'S-1-5-18',      # SYSTEM
-        [Security.Principal.SecurityIdentifier] 'S-1-5-32-544',  # Administrateurs
-        $accountSid
-    )
-
-    foreach ($sid in $allowed) {
-        $rule = New-Object Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'Allow')
-        $acl.AddAccessRule($rule)
-    }
-
-    Set-Acl -LiteralPath $Path -AclObject $acl
-
-    Write-Host ''
-    Write-Host "Jeton chiffré dans $Path" -ForegroundColor Green
-    Write-Host "  Lecture autorisée : SYSTEM, Administrateurs, $Account"
-    Write-Host ''
-
-    exit 0
-}
-catch {
-    Write-Host $_.Exception.Message -ForegroundColor Red
     exit 1
 }
 ```
