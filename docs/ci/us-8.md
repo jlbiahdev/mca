@@ -28,8 +28,7 @@ Ticket : voir `epic.md`, US 8. Copier les fichiers dans `D:\ci\runner`, en **UTF
 
     # ── Build ───────────────────────────────────────────────────────────────
     # Script de build, relatif à la racine des sources téléchargées.
-    BuildScript         = 'src\scripts\devops\dev\build.ps1'
-    BuildConfiguration  = 'Release'
+    BuildScript         = 'src\scripts\devops\int\build.ps1'
 
     # Environnement transmis au script de build
     # (src\scripts\devops\config\<env>.psd1).
@@ -116,7 +115,7 @@ function Read-CiConfiguration {
 
     $requiredKeys = @(
         'GitLabUrl', 'ProjectId', 'TokenFile', 'RunnerRoot',
-        'BuildRoot', 'BuildScript', 'BuildConfiguration', 'BuildEnvironment',
+        'BuildRoot', 'BuildScript', 'BuildEnvironment',
         'BuildTimeoutMinutes', 'StatusName'
     )
 
@@ -463,12 +462,11 @@ function Invoke-CiBuild {
     $arguments = @(
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', ('"{0}"' -f $buildScript),
-        '-Configuration', $script:Config.BuildConfiguration,
         '-RepositoryRoot', ('"{0}"' -f $buildRoot),
         '-Environment', $script:Config.BuildEnvironment
     )
 
-    Write-CiLog "Build : $buildScript ($($script:Config.BuildConfiguration))"
+    Write-CiLog "Build : $buildScript (environnement $($script:Config.BuildEnvironment))"
     Write-CiLog "Journal du build : $outputLog"
 
     $started = Get-Date

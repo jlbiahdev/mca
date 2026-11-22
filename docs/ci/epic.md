@@ -413,9 +413,9 @@ Console PowerShell **administrateur**, ouverte avec le compte du runner.
 
 ## US 6 — Build
 
-**Contexte** : le runner compile les sources avec le même script qu'en dev, `src\scripts\devops\dev\build.ps1`, en Release. La machine de POC n'a pas git : le runner fournit la racine des sources (`-RepositoryRoot D:\ci\build`), et le script ne demande alors pas git. Il utilise la configuration `int` (`src\scripts\devops\config\int.psd1`). Le runner lance `build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment int`.
+**Contexte** : le runner compile les sources avec un script dédié à l'intégration, `src\scripts\devops\int\build.ps1`, qui s'appuie sur le même module que les scripts de dev (`StyxBuild.psm1`). La machine de POC n'a pas git : le script reçoit la racine des sources (`-RepositoryRoot`, obligatoire). Il compile toujours dans la configuration de l'environnement `int` (`src\scripts\devops\config\int.psd1`, `DotNet.Configuration = 'Release'`) : pas de Debug en intégration. Le runner lance `int\build.ps1 -RepositoryRoot D:\ci\build -Environment int`.
 
-**Code** : étape US 6. Ajouts : clés `BuildScript`, `BuildConfiguration`, `BuildEnvironment` et `BuildTimeoutMinutes` dans `ci-dev.psd1` ; lancement du build (`Invoke-CiBuild`), dont la sortie va dans `D:\ci\runner\builds\<date>-<commit>.log`. Le commit est noté dans `processed.txt` avec son résultat (`success` ou `failed`).
+**Code** : étape US 6. Ajouts : clés `BuildScript`, `BuildEnvironment` et `BuildTimeoutMinutes` dans `ci-dev.psd1` ; lancement du build (`Invoke-CiBuild`), dont la sortie va dans `D:\ci\runner\builds\<date>-<commit>.log`. Le commit est noté dans `processed.txt` avec son résultat (`success` ou `failed`).
 
 ### Dans GitLab
 
@@ -423,11 +423,10 @@ Ajouter au dépôt, par une MR (branche de travail, puis merge dans `main`) :
 
 | Fichier du dépôt | Contenu |
 |---|---|
+| `src/scripts/devops/int/build.ps1` | build d'intégration : `-RepositoryRoot` obligatoire, sans git, configuration de l'environnement (Release) |
 | `src/scripts/devops/config/int.psd1` | configuration de la machine de POC (valeurs `XXXXX` à renseigner) |
 
-`build.ps1` et `StyxBuild.psm1` acceptent déjà `-RepositoryRoot` sans appeler git : ils ne changent pas.
-
-Le fichier est dans `us-6-scripts.md`.
+Les fichiers sont dans `us-6-scripts.md`.
 
 Rebaser ensuite la branche de la MR de test (`test/ci-dev`) sur `main`, pour que ses commits contiennent ces scripts.
 
@@ -446,7 +445,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 2. Compiler une fois à la main les sources déposées à l'US 5, pour vérifier la restauration NuGet et le build avec ce compte :
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment int
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\int\build.ps1 -RepositoryRoot D:\ci\build
    ```
 
    Résultat attendu : le build se termine par un message de succès. En cas d'échec de la restauration (sources NuGet inaccessibles), le signaler : le runner échouerait de la même façon.
@@ -459,7 +458,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 
 1. Lire le journal du jour.
 
-   Résultat attendu : `Build : D:\ci\build\src\scripts\devops\dev\build.ps1 (Release)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
+   Résultat attendu : `Build : D:\ci\build\src\scripts\devops\int\build.ps1 (environnement int)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
 
 2. Lire la fin du journal du build (chemin affiché dans le journal du jour) :
 
