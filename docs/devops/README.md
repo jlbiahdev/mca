@@ -81,12 +81,13 @@ Le runner `cicd-int` est lancé chaque minute par une tâche planifiée sur la m
 
 | Script | Rôle |
 |---|---|
-| `cicd-int.ps1`, `cicd-int.psd1` | le runner et sa configuration |
+| `cicd-int-poc.ps1`, `cicd-int-poc.psd1` | le runner et sa configuration |
 | `install-task.ps1` | création de la tâche planifiée `Styx.CicdInt` |
 | `protect-token.ps1` | chiffrement du jeton GitLab sur la machine |
 | `diag-token.ps1` | diagnostic du jeton chiffré |
+| `gitlab-token.dat` | jeton GitLab chiffré par `protect-token.ps1` |
 
-Les scripts du dépôt sont la référence ; ceux de la machine d'intégration en sont une copie (`D:\ci\runner`). Le jeton chiffré (`gitlab-token.dat`) n'existe que sur la machine : il n'est jamais versionné. Fonctionnement, exploitation et dépannage : `runner.md`. Installation sur un autre projet : `HOWTO.md`.
+Le dossier contient le runner tel qu'il est installé et s'utilise tel quel. Fonctionnement, exploitation et dépannage : `runner.md`. Installation sur un autre projet : `HOWTO.md`.
 
 ### Téléchargement et déploiement sur les serveurs
 
