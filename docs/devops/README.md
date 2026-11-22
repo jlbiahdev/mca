@@ -16,11 +16,11 @@ devops/
 │       ├── 02_download_deploy/
 │       ├── 03_deploy/
 │       └── tests_download_deploy/
+├── howto/      mise en place du runner CI sur un autre projet : HOWTO.md et fichiers modèles
 ├── config/     configuration par environnement (dev.psd1, int.psd1)
 ├── modules/    fonctions communes (StyxBuild, Styx.Processes)
 ├── README.md   ce document
 ├── runner.md   runner CI : fonctionnement et exploitation
-├── HOWTO.md    runner CI : mise en place sur un autre projet
 ├── env.example.ps1
 ├── mytree.ps1
 └── repair_utf8_bom.ps1
@@ -30,7 +30,8 @@ devops/
 |---|---|---|
 | `dev/` | développeur, sur son poste | `dev/README.md` |
 | `int/` | appelé par le runner sur la machine d'intégration | ci-dessous |
-| `cicd/ci/` | équipe qui exploite ou installe le runner | `runner.md`, `HOWTO.md` |
+| `cicd/ci/` | équipe qui exploite le runner | `runner.md` |
+| `howto/` | équipe qui installe le runner sur un autre projet | `howto/HOWTO.md` |
 | `cicd/cd/` | équipe qui déploie sur les serveurs | le README de chaque sous-dossier |
 | `config/` | tous | ci-dessous |
 | `modules/` | utilisé par les scripts, pas lancé directement | ci-dessous |
@@ -92,7 +93,11 @@ Publier le package fait partie de l'intégration : le runner produit l'artefact,
 | `diag-token.ps1` | diagnostic du jeton chiffré |
 | `gitlab-token.dat` | jeton GitLab chiffré par `protect-token.ps1` |
 
-Le dossier contient le runner tel qu'il est installé et s'utilise tel quel. Fonctionnement, exploitation et dépannage : `runner.md`. Installation sur un autre projet : `HOWTO.md`.
+Le dossier contient le runner tel qu'il est installé, avec ses vraies valeurs, et s'utilise tel quel. Fonctionnement, exploitation et dépannage : `runner.md`.
+
+## `howto/` — installer le runner ailleurs
+
+`HOWTO.md` décrit la mise en place du runner sur un autre projet, étape par étape. Les fichiers qu'il décrit sont à côté de lui, sans valeur réelle (configuration à renseigner, pas de jeton) : `ci-int.ps1`, `ci-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1`.
 
 ## `cicd/cd/` — le déploiement (CD)
 

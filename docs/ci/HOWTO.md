@@ -29,7 +29,16 @@ Le dépôt doit contenir, dans `src/scripts/devops/` :
 | `int/package.ps1` | génération du package (`-RepositoryRoot`, `-PackageVersion`, `-OutputDirectory`) |
 | `int/push-artifactory.ps1` | push du package (`-PackageFile`, `-RepositoryRoot`, `-Environment`) |
 | `config/int.psd1` | configuration de l'environnement, dont `Artifactory.BaseUrl`, `Artifactory.Repository`, `Artifactory.ApiKeyVariable` |
-| `cicd/ci/` | scripts du runner : `ci-int.ps1`, `ci-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1` |
+
+Les fichiers du runner sont fournis avec ce document, dans `src/scripts/devops/howto/`, sans valeur réelle :
+
+| Fichier | Rôle |
+|---|---|
+| `ci-int.ps1` | le runner |
+| `ci-int.psd1` | sa configuration, avec `GitLabUrl` et `ProjectId` à renseigner |
+| `install-task.ps1` | création de la tâche planifiée |
+| `protect-token.ps1` | chiffrement du jeton GitLab |
+| `diag-token.ps1` | diagnostic du jeton chiffré |
 
 Vérifier sur un poste de développeur que la solution se restaure avec un dossier de paquets vide :
 
@@ -101,7 +110,7 @@ Résultat attendu : la liste des trois dossiers.
 
 ### 3.2 Scripts du runner
 
-1. Copier dans `D:\ci\runner` les scripts de `src/scripts/devops/cicd/ci/` du dépôt (`ci-int.ps1`, `ci-int.psd1`, `install-task.ps1`, `protect-token.ps1`, `diag-token.ps1`) (git n'est pas nécessaire sur la machine : copie depuis un poste de développeur par la connexion Bureau à distance, ou téléchargement de chaque fichier depuis GitLab, bouton **Download**).
+1. Copier dans `D:\ci\runner` les cinq fichiers de `src/scripts/devops/howto/` (git n'est pas nécessaire sur la machine : copie depuis un poste de développeur par la connexion Bureau à distance, ou téléchargement de chaque fichier depuis GitLab, bouton **Download**).
 2. Débloquer les fichiers copiés :
 
    ```powershell
