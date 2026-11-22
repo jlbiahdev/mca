@@ -53,7 +53,17 @@ Résultat attendu : ni `NU1101` (paquet absent), ni `NU1102` (version absente), 
 
 ## 5. Vérifier que tout est versionné
 
-Le `.gitignore` ignore les `*.nupkg` : un paquet présent sur le poste mais non versionné manquera sur le POC.
+Le `.gitignore` ignore les `*.nupkg` : un paquet présent sur le poste mais non versionné manquera sur le POC. Cette commande liste les paquets ignorés :
+
+```powershell
+git status --ignored --short nugets
+```
+
+Résultat attendu : des lignes `!!` pour les paquets à ajouter. Ils sont ajoutés à l'étape 6.
+
+## 6. Commiter et pousser
+
+Ajouter les paquets, y compris ceux ignorés par le `.gitignore` :
 
 ```powershell
 git add -f "nugets/*.nupkg"
@@ -61,17 +71,19 @@ git add -f "nugets/*.nupkg"
 
 Les guillemets sont nécessaires : c'est git qui interprète le `*`, sous-dossiers compris. Ne jamais lancer `git add -f .`, qui ajouterait tous les fichiers ignorés du dépôt.
 
+Ajouter le `nuget.config` :
+
+```powershell
+git add src/backend/nuget.config
+```
+
+Vérifier :
+
 ```powershell
 git status --ignored --short nugets
 ```
 
 Résultat attendu : aucune ligne `!!`.
-
-## 6. Commiter et pousser
-
-```powershell
-git add src/backend/nuget.config
-```
 
 ```powershell
 git status --short
