@@ -413,7 +413,7 @@ Console PowerShell **administrateur**, ouverte avec le compte du runner.
 
 ## US 6 — Build
 
-**Contexte** : le runner compile les sources avec le même script qu'en local : `devops\dev\build.ps1 -RepositoryRoot D:\ci\build`, en Release, avec l'environnement `dev`.
+**Contexte** : le runner compile les sources avec le même script qu'en local : `src\scripts\devops\dev\build.ps1 -RepositoryRoot D:\ci\build`, en Release, avec l'environnement `dev`.
 
 **Code** : étape US 6. Ajouts : clés `BuildScript`, `BuildConfiguration`, `BuildEnvironment` et `BuildTimeoutMinutes` dans `ci-dev.psd1` ; lancement du build (`Invoke-CiBuild`), dont la sortie va dans `D:\ci\runner\builds\<date>-<commit>.log`. Le commit est noté dans `processed.txt` avec son résultat (`success` ou `failed`).
 
@@ -436,7 +436,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 2. Compiler une fois à la main les sources déposées à l'US 5, pour vérifier la restauration NuGet et le build avec ce compte :
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment dev
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment dev
    ```
 
    Résultat attendu : le build se termine par un message de succès. En cas d'échec de la restauration (sources NuGet inaccessibles), le signaler : le runner échouerait de la même façon.
@@ -449,7 +449,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 
 1. Lire le journal du jour.
 
-   Résultat attendu : `Build : D:\ci\build\devops\dev\build.ps1 (Release)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
+   Résultat attendu : `Build : D:\ci\build\src\scripts\devops\dev\build.ps1 (Release)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
 
 2. Lire la fin du journal du build (chemin affiché dans le journal du jour) :
 
