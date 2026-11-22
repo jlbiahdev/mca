@@ -1,4 +1,4 @@
-# Runner CI/CD d'intégration (`cicd-int-poc`)
+# Runner CI/CD d'intégration (`cicd-int`)
 
 Ce document explique le fonctionnement du runner et son exploitation. Sa mise en place pour un autre projet est décrite dans `HOWTO.md`.
 
@@ -52,13 +52,13 @@ Depuis une version publiée, on retrouve son pipeline (`#<n>`) et donc son commi
 
 | Emplacement | Contenu |
 |---|---|
-| `D:\ci\runner\cicd-int-poc.ps1` | le runner |
-| `D:\ci\runner\cicd-int-poc.psd1` | sa configuration (aucun secret) |
+| `D:\ci\runner\cicd-int.ps1` | le runner |
+| `D:\ci\runner\cicd-int.psd1` | sa configuration (aucun secret) |
 | `D:\ci\runner\gitlab-token.dat` | le jeton GitLab chiffré |
 | `D:\ci\runner\install-task.ps1`, `protect-token.ps1`, `diag-token.ps1` | installation de la tâche, chiffrement du jeton, diagnostic du jeton |
 | `D:\ci\runner\processed.txt` | commits de MR traités : `<commit>  MR !<n>  <résultat>  <date>` |
 | `D:\ci\runner\processed-cd.txt` | commits de `main` traités : `<commit>  main <version>  <résultat>  <date>` |
-| `D:\ci\runner\logs\cicd-int-poc-<date>.log` | journal du jour : une ligne par passage au minimum |
+| `D:\ci\runner\logs\cicd-int-<date>.log` | journal du jour : une ligne par passage au minimum |
 | `D:\ci\runner\builds\<date>-<commit>-<étape>.log` | journal de chaque build, package ou push (`.err.log` : sortie d'erreur) |
 | `D:\ci\build` | sources du commit en cours, **vidé à chaque commit** |
 | `D:\ci\packages\<version>` | packages générés |
@@ -67,20 +67,20 @@ Les scripts du runner sont aussi versionnés dans le dépôt (`src\scripts\devop
 
 ## 4. Tâche planifiée
 
-- Nom : `Styx.CicdIntPoc`, créée par `install-task.ps1`, avec le compte qui lance ce script.
+- Nom : `Styx.CicdInt`, créée par `install-task.ps1`, avec le compte qui lance ce script.
 - Fréquence : toutes les minutes, sans fin ; un lancement est ignoré si le précédent tourne encore.
 - Mode : « Do not store password » : la tâche tourne que la session soit ouverte ou non, y compris après un redémarrage, sans mot de passe enregistré (une stratégie de l'entreprise interdit de l'enregistrer). Contrepartie : la tâche n'accède pas aux ressources réseau authentifiées par le compte Windows (partages). Les appels à GitLab et à Artifactory, authentifiés par jeton, ne sont pas concernés.
 - Privilèges les plus élevés du compte, et PowerShell lancé sans console (`conhost.exe --headless`) : aucune fenêtre ne s'affiche.
 
 ## 5. Jeton GitLab
 
-- Jeton de projet `cicd-int-poc-api`, rôle **Maintainer**, scope `api`. Le rôle Maintainer est nécessaire pour lire la variable de la clé Artifactory ; le scope `api` pour publier des statuts, déposer des fichiers et commenter.
+- Jeton de projet du runner, rôle **Maintainer**, scope `api`. Le rôle Maintainer est nécessaire pour lire la variable de la clé Artifactory ; le scope `api` pour publier des statuts, déposer des fichiers et commenter.
 - Il est chiffré par Windows (DPAPI) au niveau de la machine, ce qui permet à la tâche de le lire sans session ouverte. Comme tout compte capable de lire le fichier pourrait le déchiffrer, `protect-token.ps1` limite la lecture à SYSTEM, aux administrateurs et au compte du runner.
 - Il a une date d'expiration (3 mois) : le renouveler avant (§ 7).
 
 La clé Artifactory n'est pas sur la machine : elle est dans la variable de projet GitLab `ARTIFACTORY_API_KEY` (masquée), et une seule mise à jour suffit à chaque renouvellement.
 
-## 6. Configuration (`cicd-int-poc.psd1`)
+## 6. Configuration (`cicd-int.psd1`)
 
 | Clé | Rôle |
 |---|---|
@@ -107,7 +107,7 @@ Le fichier est lu à chaque passage : une modification est prise en compte à la
 ### Suivre l'activité
 
 - Dans GitLab : statut des MR, **Build > Pipelines**, page d'un commit de `main` ; un clic sur le job (`ci-int` ou `cd-int`) ouvre le journal.
-- Sur la machine : le journal du jour, `D:\ci\runner\logs\cicd-int-poc-<date>.log`. Sans activité, une ligne par minute : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
+- Sur la machine : le journal du jour, `D:\ci\runner\logs\cicd-int-<date>.log`. Sans activité, une ligne par minute : `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
 
 ### Reconstruire ou republier un commit
 
@@ -116,17 +116,17 @@ Supprimer la ligne du commit dans `processed.txt` (MR) ou `processed-cd.txt` (`m
 ### Arrêter et relancer
 
 ```powershell
-Disable-ScheduledTask -TaskName 'Styx.CicdIntPoc'
+Disable-ScheduledTask -TaskName 'Styx.CicdInt'
 ```
 
 ```powershell
-Enable-ScheduledTask -TaskName 'Styx.CicdIntPoc'
+Enable-ScheduledTask -TaskName 'Styx.CicdInt'
 ```
 
 Lancer un passage à la main (tâche désactivée, pour voir le déroulé dans la console) :
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int-poc.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int.ps1
 ```
 
 ### Renouveler le jeton GitLab
@@ -160,7 +160,7 @@ Modifier la valeur de la variable `ARTIFACTORY_API_KEY` dans **Settings > CI/CD 
 | `Push échoué (code 1)` | clé refusée, ou version déjà présente (409) | lire le journal du push ; renouveler la clé ; republier (§ 7) |
 | `… interrompu après 30 min` | build trop long ou bloqué | augmenter `BuildTimeoutMinutes`, ou chercher le blocage dans le journal |
 | `Journal non déposé dans GitLab` | dépôt de fichier refusé | sans effet sur le résultat ; le journal reste sur la machine |
-| Plus aucune ligne dans le journal du jour | tâche désactivée, ou machine arrêtée | `Get-ScheduledTask -TaskName 'Styx.CicdIntPoc'` ; relancer `install-task.ps1` |
+| Plus aucune ligne dans le journal du jour | tâche désactivée, ou machine arrêtée | `Get-ScheduledTask -TaskName 'Styx.CicdInt'` ; relancer `install-task.ps1` |
 | Une fenêtre s'ouvre chaque minute | tâche créée sans `conhost --headless` | relancer `install-task.ps1` |
 
 ## 9. Limites connues
