@@ -1,50 +1,106 @@
-# Paquets NuGet internes — commandes
+# Paquets NuGet du dépôt — commandes
 
-À lancer sur le poste de dev, depuis la racine du dépôt styx-poc.
+Objectif : que la solution se restaure uniquement avec les paquets du dépôt (`nugets\` et `nugets\socgen\`), sans nuget.org ni Artifactory.
 
-## 1. Versions demandées par les projets
+Sauf mention contraire, à lancer dans PowerShell sur le poste de dev, depuis la racine du dépôt styx-poc.
 
-```powershell
-Get-ChildItem .\src\backend -Recurse -Filter *.csproj | Select-String -Pattern 'SocGen\.ApiBank[^"]*"\s+Version="[^"]*"' | ForEach-Object { $_.Matches[0].Value } | Sort-Object -Unique
+## 1. nuget.config du dépôt
+
+Dans `src\backend\nuget.config`, `<clear />` écarte les sources de la machine (dont nuget.org) ; seules les sources du dépôt restent. Les chemins sont relatifs au fichier.
+
+```xml
+<packageSources>
+  <clear />
+  <add key="Offline" value="..\..\nugets" />
+  <add key="OfflineSocGen" value="..\..\nugets\socgen" />
+</packageSources>
 ```
 
-Résultat attendu : une ligne par paquet interne et par version, par exemple `SocGen.ApiBank.Security.Authentication" Version="x.y.z"`.
+## 2. Lister les paquets manquants
 
-## 2. Versions présentes dans le dépôt
-
-```powershell
-Get-ChildItem .\nugets\socgen -Recurse -Filter *.nupkg | ForEach-Object { $_.Name } | Sort-Object
-```
-
-## 3. Ajouter au dépôt les paquets internes du cache du poste
-
-Le cache NuGet du poste (`%USERPROFILE%\.nuget\packages`) contient les paquets avec lesquels la solution compile. `dotnet nuget push` vers un dossier les range dans la structure attendue par NuGet (`<paquet>\<version>\`) ; les paquets déjà présents sont ignorés.
+La dernière restauration complète du poste (dossier `$env:TEMP\nuget-w-socgen`) contient tous les paquets de la solution, dépendances comprises. Cette commande liste ceux qui ne sont pas encore dans `nugets\`, sans rien copier :
 
 ```powershell
-Get-ChildItem "$env:USERPROFILE\.nuget\packages" -Directory -Filter 'socgen.apibank.*' | Get-ChildItem -Recurse -Filter *.nupkg | ForEach-Object { dotnet nuget push $_.FullName --source "$PWD\nugets\socgen" --skip-duplicate }
+$have = (Get-ChildItem nugets -Recurse -Filter *.nupkg).Name
+Get-ChildItem "$env:TEMP\nuget-w-socgen" -Recurse -Filter *.nupkg | Where-Object { $have -notcontains $_.Name -and $_.Name -notlike 'socgen.*' } | Select-Object Name
 ```
 
-Résultat attendu : une ligne `Your package was pushed.` par paquet ajouté, ou un message indiquant qu'il existe déjà.
+Résultat attendu : une ligne par paquet manquant.
+
+## 3. Copier les paquets manquants
+
+Uniquement si la liste de l'étape 2 est correcte. Dans la même fenêtre (la variable `$have` est réutilisée) :
+
+```powershell
+Get-ChildItem "$env:TEMP\nuget-w-socgen" -Recurse -Filter *.nupkg | Where-Object { $have -notcontains $_.Name -and $_.Name -notlike 'socgen.*' } | Copy-Item -Destination nugets -PassThru
+```
+
+Résultat attendu : la liste des fichiers copiés dans `nugets\`.
 
 ## 4. Vérifier la restauration comme sur une machine neuve
 
-Seules les sources du dépôt sont autorisées, et le dossier de paquets est vide : un paquet manquant provoque une erreur `NU1101`.
+Dossier de paquets vide, sources du `nuget.config` uniquement :
 
 ```powershell
-dotnet restore .\src\backend\styxapipoc.sln --source "$PWD\nugets" --source "$PWD\nugets\socgen" --packages "$env:TEMP\nuget-test"
+Remove-Item -Recurse -Force "$env:TEMP\nuget-test" -ErrorAction SilentlyContinue
 ```
-
-Résultat attendu : aucune erreur `NU1101`.
 
 ```powershell
-Remove-Item "$env:TEMP\nuget-test" -Recurse -Force
+dotnet restore .\src\backend\styxapipoc.sln --packages "$env:TEMP\nuget-test"
 ```
 
-## 5. nuget.config du dépôt
+Résultat attendu : ni `NU1101` (paquet absent), ni `NU1102` (version absente), ni `NU1603` (version approchante). Les avertissements `NU1900` (audit de vulnérabilités, qui interroge nuget.org) ne bloquent pas.
 
-Dans `src\backend\nuget.config`, remplacer la source `Offline` par les deux sources du dépôt (chemins relatifs au fichier) :
+## 5. Vérifier que tout est versionné
 
-```xml
-<add key="Offline" value="..\..\nugets" />
-<add key="OfflineSocGen" value="..\..\nugets\socgen" />
+Le `.gitignore` ignore les `*.nupkg` : un paquet présent sur le poste mais non versionné manquera sur le POC.
+
+```powershell
+git add -f "nugets/*.nupkg"
+```
+
+Les guillemets sont nécessaires : c'est git qui interprète le `*`, sous-dossiers compris. Ne jamais lancer `git add -f .`, qui ajouterait tous les fichiers ignorés du dépôt.
+
+```powershell
+git status --ignored --short nugets
+```
+
+Résultat attendu : aucune ligne `!!`.
+
+## 6. Commiter et pousser
+
+```powershell
+git add src/backend/nuget.config
+```
+
+```powershell
+git status --short
+```
+
+Résultat attendu : des `A` pour les `.nupkg`, un `M` pour `nuget.config`, rien d'autre.
+
+```powershell
+git commit -m "US6 : paquets NuGet complets et sources limitées au dépôt"
+```
+
+```powershell
+git push
+```
+
+Le runner reprend le nouveau commit de la MR au passage suivant.
+
+## Tester une correction directement sur le POC
+
+Les sources du dernier commit traité restent dans `D:\ci\build` tant qu'aucun nouveau commit n'arrive sur la MR. Sur le POC :
+
+```powershell
+notepad D:\ci\build\src\backend\nuget.config
+```
+
+```powershell
+dotnet restore D:\ci\build\src\backend\styxapipoc.sln
+```
+
+```powershell
+D:\ci\build\src\scripts\devops\int\build.ps1 -RepositoryRoot D:\ci\build
 ```
