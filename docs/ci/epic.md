@@ -495,6 +495,7 @@ La publication d'un statut demande le scope `api`, que le jeton de l'US 1 n'a pa
    | Champ | Valeur |
    |---|---|
    | Token name | `ci-int-poc-api` |
+   | Select a role | **Developer** (le minimum pour publier un statut : Reporter ne suffit pas) |
    | Select scopes | `api` |
 
 2. **Create project access token**, puis copier le jeton (il ne sera plus affiché).
