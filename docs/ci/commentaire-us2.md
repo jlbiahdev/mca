@@ -17,7 +17,9 @@ L'enregistrement de la tâche avec le mot de passe du compte (« Exécuter même
 
 Par défaut, le script crée donc une tâche qui tourne tant que la session du compte est ouverte, même verrouillée. Elle s'arrête à la déconnexion ou au redémarrage de la machine, et reprend à la connexion suivante.
 
-L'option `-RunWhenLoggedOff` crée la tâche avec mot de passe, pour une machine où la stratégie l'autorise. Pour un fonctionnement session fermée sur ce poste, il faudra un compte de service autorisé.
+Le compte utilisé est déjà un compte de service : la stratégie s'applique aussi à lui. Le runner tourne donc tant que la session de ce compte est ouverte ; une session Bureau à distance simplement fermée (déconnectée, sans se déconnecter du compte) reste ouverte et suffit. Après un redémarrage de la machine, il faut rouvrir la session.
+
+L'option `-RunWhenLoggedOff` crée la tâche avec mot de passe, pour une machine ou un compte où la stratégie l'autorise. Pour un fonctionnement après redémarrage sur ce poste, il faudra une exception à cette stratégie pour ce compte.
 
 **3. Privilèges les plus élevés**
 

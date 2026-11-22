@@ -206,7 +206,7 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
      Fréquence : toutes les 1 minute(s)
    ```
 
-   Pour le mode session fermée, ajouter `-RunWhenLoggedOff` : le mot de passe du compte est demandé. En cas d'erreur `0x80070520`, la stratégie de l'entreprise l'interdit : garder le mode par défaut, ou demander un compte de service autorisé.
+   Pour le mode session fermée, ajouter `-RunWhenLoggedOff` : le mot de passe du compte est demandé. En cas d'erreur `0x80070520`, la stratégie de l'entreprise l'interdit pour ce compte : garder le mode par défaut, ou demander une exception à cette stratégie.
 
 ### Vérifications
 
