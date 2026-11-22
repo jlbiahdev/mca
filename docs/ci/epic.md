@@ -634,10 +634,16 @@ Fermer la MR de test (**Close merge request**) et supprimer sa branche.
 
    | Champ | Valeur |
    |---|---|
+   | Type | `Variable (default)` |
+   | Environments | voir ci-dessous |
+   | Visibility | `Masked` : la valeur n'apparaît pas dans les journaux. Pas `Masked and hidden` : la valeur ne pourrait plus être vérifiée dans l'interface, et l'API pourrait ne plus la renvoyer au runner |
+   | Protect variable | décoché : ne concerne que les pipelines GitLab, sans effet sur le runner |
+   | Expand variable reference | décoché : un `$` dans la clé serait interprété comme une référence à une autre variable |
+   | Description | `Clé Artifactory du runner cicd-int-poc` |
    | Key | `ARTIFACTORY_API_KEY` (même nom que `Artifactory.ApiKeyVariable` dans `config\int.psd1`) |
    | Value | la clé Artifactory |
-   | Mask variable | coché |
-   | Protect variable | décoché |
+
+   `Masked` impose un format à la valeur (au moins 8 caractères, sans espace) : une clé Artifactory le respecte en général. Si GitLab refuse la valeur, le signaler avant d'aller plus loin.
 
 3. **Dépôt** : par une MR, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Fusionner cette MR **avant** d'installer le code de l'US 10 : le premier passage du nouveau runner publiera ce commit de `main`.
 
