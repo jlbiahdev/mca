@@ -335,8 +335,13 @@ function Set-CommitStatus {
 }
 
 # ── Sources ──────────────────────────────────────────────────────────────────
-# Télécharge le zip du commit (généré par GitLab) et le dépose dans BuildRoot,
-# après l'avoir vidé. Aucun besoin de git sur la machine.
+# Télécharge le zip du commit (généré par GitLab), puis écrit chaque fichier
+# directement dans BuildRoot, après l'avoir vidé. Aucun besoin de git.
+#
+# GitLab range tout le contenu dans un dossier racine <projet>-<commit>-<commit>
+# (près de 90 caractères) : il est retiré à l'extraction, sans dossier
+# intermédiaire, pour garder les chemins sous la limite de 260 caractères de
+# Windows PowerShell 5.1.
 
 function Save-CommitSources {
     param(
@@ -349,13 +354,12 @@ function Save-CommitSources {
 
     $workFolder = Join-Path $script:Config.RunnerRoot 'work'
     $zipFile    = Join-Path $workFolder 'sources.zip'
-    $extractDir = Join-Path $workFolder 'extract'
 
     if (Test-Path -LiteralPath $workFolder) {
         Remove-Item -LiteralPath $workFolder -Recurse -Force
     }
 
-    New-Item -ItemType Directory -Path $extractDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $workFolder -Force | Out-Null
 
     Write-CiLog "Téléchargement des sources du commit $Commit"
 
@@ -371,14 +375,6 @@ function Save-CommitSources {
 
     Write-CiLog ('Archive reçue : {0:N1} Mo' -f ((Get-Item -LiteralPath $zipFile).Length / 1MB))
 
-    Expand-Archive -LiteralPath $zipFile -DestinationPath $extractDir -Force
-
-    # GitLab range tout le contenu dans un dossier racine <projet>-<commit>-<commit>.
-    $rootFolders = @(Get-ChildItem -LiteralPath $extractDir -Directory)
-    if ($rootFolders.Count -ne 1) {
-        throw "Archive inattendue : un seul dossier racine attendu, $($rootFolders.Count) trouvé(s)."
-    }
-
     $buildRoot = $script:Config.BuildRoot
 
     if (Test-Path -LiteralPath $buildRoot) {
@@ -388,11 +384,55 @@ function Save-CommitSources {
         New-Item -ItemType Directory -Path $buildRoot -Force | Out-Null
     }
 
-    Get-ChildItem -LiteralPath $rootFolders[0].FullName -Force | Move-Item -Destination $buildRoot
+    $rootPrefix = [IO.Path]::GetFullPath($buildRoot).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+    $fileCount  = 0
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zipFile)
+
+    try {
+        foreach ($entry in $archive.Entries) {
+            # Retire le dossier racine <projet>-<commit>-<commit>/.
+            $separator = $entry.FullName.IndexOf('/')
+            if ($separator -lt 0) { continue }
+
+            $relative = $entry.FullName.Substring($separator + 1)
+            if ([string]::IsNullOrEmpty($relative)) { continue }
+
+            $target = [IO.Path]::GetFullPath((Join-Path $buildRoot ($relative.Replace('/', [IO.Path]::DirectorySeparatorChar))))
+
+            # Une entrée ne doit jamais écrire hors de BuildRoot.
+            if (-not $target.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Chemin inattendu dans l'archive : $($entry.FullName)"
+            }
+
+            if ($relative.EndsWith('/')) {
+                New-Item -ItemType Directory -Path $target -Force | Out-Null
+                continue
+            }
+
+            try {
+                $parent = Split-Path -Parent $target
+                if (-not (Test-Path -LiteralPath $parent)) {
+                    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                }
+
+                [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $true)
+            }
+            catch {
+                throw "Extraction impossible de $target ($($target.Length) caractères) : $($_.Exception.Message)"
+            }
+
+            $fileCount++
+        }
+    }
+    finally {
+        $archive.Dispose()
+    }
 
     Remove-Item -LiteralPath $workFolder -Recurse -Force
 
-    Write-CiLog "Sources déposées dans $buildRoot"
+    Write-CiLog "Sources déposées dans $buildRoot ($fileCount fichiers)"
 }
 
 # ── Build ────────────────────────────────────────────────────────────────────
