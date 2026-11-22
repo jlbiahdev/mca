@@ -1,13 +1,5 @@
 **US 8 — Build en échec et erreurs du runner**
 
-**Ajouts par rapport au ticket initial**
-
-Le chemin du journal sur la machine ne permettait pas de diagnostiquer un échec depuis GitLab, et le pipeline externe n'indique pas qui a lancé le build (« Created by » vide : il est attribué au compte technique du jeton). Le périmètre a donc été élargi :
-
-- le journal complet du build est déposé dans le projet GitLab ; un clic sur le job `ci-dev` l'ouvre ;
-- la description du statut donne le résultat, la durée, la machine et l'auteur du commit ; en cas d'échec, le nombre d'erreurs et la première ;
-- en cas d'échec, un commentaire est publié dans la MR : commit (titre, auteur), auteur de la MR, durée, machine, pipeline, lien vers le journal et liste des erreurs de compilation.
-
 **Validation (MR !6)**
 
 | Cas | Résultat |
