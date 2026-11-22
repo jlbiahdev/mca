@@ -28,7 +28,7 @@ Ticket : voir `epic.md`, US 7. Copier les fichiers dans `D:\ci\runner`, en **UTF
 
     # ── Build ───────────────────────────────────────────────────────────────
     # Script de build, relatif à la racine des sources téléchargées.
-    BuildScript         = 'src\scripts\devops\int\build.ps1'
+    BuildScript         = 'src\scripts\devops\dev\build.ps1'
     BuildConfiguration  = 'Release'
 
     # Environnement transmis au script de build
