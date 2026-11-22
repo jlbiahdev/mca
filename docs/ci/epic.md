@@ -542,12 +542,19 @@ La publication d'un statut demande le scope `api`, que le jeton de l'US 1 n'a pa
 
 ## US 8 — Build en échec et erreurs du runner
 
-**Contexte** : un build en échec doit être signalé dans la MR avec de quoi le diagnostiquer. Une erreur du runner (GitLab injoignable, téléchargement impossible) ne doit pas faire perdre le commit.
+**Contexte** : un build en échec doit être signalé dans la MR avec de quoi le diagnostiquer **depuis GitLab**, sans accès à la machine du runner, et avec l'auteur du commit. Une erreur du runner (GitLab injoignable, téléchargement impossible) ne doit pas faire perdre le commit.
+
+L'API des statuts n'accepte pas de journal : un statut n'a qu'une description (255 caractères au plus) et un lien. Le pipeline externe est attribué au compte technique du jeton (« Created by » vide) ; l'auteur est donc écrit dans la description et dans le commentaire.
 
 **Code** : étape US 8 (version finale). Ajouts :
 
-- la description du statut indique le résultat, la durée, la machine et le chemin du journal du build ;
+- après chaque build, le journal complet (sortie standard et sortie d'erreur) est déposé dans le projet GitLab (API d'upload) ; le lien du statut pointe vers lui : cliquer sur le job `ci-dev` ouvre le journal ;
+- la description du statut indique le résultat, la durée, la machine et l'auteur du commit ; en cas d'échec, le nombre d'erreurs et la première erreur de compilation ;
+- en cas d'échec, un commentaire est publié dans la MR : commit (titre et auteur), auteur de la MR, durée, machine, pipeline, lien vers le journal complet, et les erreurs de compilation (50 lignes au plus, sans doublon ; à défaut, les dernières lignes du journal) ;
+- si le dépôt du journal ou le commentaire échoue, le build garde son résultat : un avertissement est écrit dans le journal du runner, et le commentaire indique le chemin du journal sur la machine ;
 - en cas d'erreur du runner, le statut passe à « échoué » avec le message d'erreur, et le commit n'est pas noté comme traité : il est repris au passage suivant.
+
+Le jeton de l'US 7 (scope `api`, rôle Developer) suffit pour déposer un fichier et publier un commentaire.
 
 ### Sur la machine de POC
 
@@ -555,36 +562,38 @@ La publication d'un statut demande le scope `api`, que le jeton de l'US 1 n'a pa
 
 ### Dans GitLab
 
-1. Faire sur `test/ci-dev` un commit **qui ne compile pas** (par exemple une ligne de code invalide dans un fichier `.cs`).
+1. Faire sur la branche de test (MR !6, `feature/47-test-failed-build`) un commit **qui ne compile pas** (par exemple une ligne de code invalide dans un fichier `.cs`).
 2. Attendre la fin du build.
 
 ### Vérifications
 
-1. La MR affiche `ci-dev` « échoué » (croix rouge). En survolant ou en ouvrant le job, la description indique `Build échoué (code 1) en <durée> sur <machine>. Journal : D:\ci\runner\builds\<date>-<commit>.log`.
-2. Le journal du build, sur la machine, contient l'erreur de compilation.
-3. **Blocage du merge** : dans **Settings > Merge requests > Merge checks**, regarder si **Pipelines must succeed** est coché.
-   - Si oui : vérifier que le bouton **Merge** de la MR est bloqué tant que le statut est « échoué ».
-   - Si non : ne pas le cocher sans accord de l'équipe, car il s'applique à toutes les MR du projet, et une panne du runner bloquerait alors tous les merges.
-4. Corriger le code dans GitLab (nouveau commit) : après le build, le statut repasse à « réussi ».
-5. **Erreur du runner** :
+1. La MR affiche `ci-dev` « échoué » (croix rouge). La description du job indique `Build échoué (code 1), <n> erreur(s), en <durée> sur <machine>. Commit de <auteur>. 1re erreur : <fichier>(<ligne>,<colonne>): error CS…`.
+2. En cliquant sur le job `ci-dev` (pipeline de la MR ou **Build > Pipelines**), le journal complet du build s'ouvre.
+3. La MR contient un commentaire « **ci-dev : Build échoué (code 1)** » avec l'auteur du commit et de la MR, le lien vers le journal et la liste des erreurs.
+4. Le journal du runner contient `Journal du build déposé dans GitLab : <adresse>` et `commentaire d'échec publié`.
+5. **Blocage du merge** (« Pipelines must succeed » est coché, voir US 7) : le bouton **Merge** de la MR est bloqué tant que le statut est « échoué ».
+6. Corriger le code (nouveau commit) : après le build, le statut repasse à « réussi », sa description indique l'auteur du commit, le job ouvre le journal, et aucun commentaire n'est ajouté.
+7. **Erreur du runner** :
    - désactiver la tâche : `Disable-ScheduledTask -TaskName 'Styx.CiDev'` ;
-   - dans `ci-dev.psd1`, remplacer `BuildScript` par un chemin qui n'existe pas (par exemple `devops\dev\absent.ps1`) ;
-   - faire un commit sur `test/ci-dev`, puis lancer le script à la main : il affiche `Script de build introuvable dans les sources`, la MR affiche `ci-dev` « échoué » avec ce message, et le commit n'est pas dans `processed.txt` ;
+   - dans `ci-dev.psd1`, remplacer `BuildScript` par un chemin qui n'existe pas (par exemple `src\scripts\devops\int\absent.ps1`) ;
+   - faire un commit sur la branche de test, puis lancer le script à la main : il affiche `Script de build introuvable dans les sources`, la MR affiche `ci-dev` « échoué » avec ce message, et le commit n'est pas dans `processed.txt` ;
    - remettre la bonne valeur de `BuildScript` et relancer le script : le commit est compilé et la MR repasse à « réussi » ;
    - réactiver la tâche : `Enable-ScheduledTask -TaskName 'Styx.CiDev'`.
 
 **Fini quand** :
 
-- un build en échec est signalé dans la MR, avec le chemin de son journal ;
+- un build en échec est signalé dans la MR avec ses erreurs, l'auteur du commit et un lien vers le journal complet, lisible depuis GitLab ;
 - après correction, le statut repasse à « réussi » ;
-- après une erreur du runner, le commit est traité au passage suivant ;
-- on sait si GitLab bloque le merge sur ce statut (noté dans ce ticket).
+- après une erreur du runner, le commit est traité au passage suivant.
 
-**Limite connue** : une erreur du runner qui persiste (jeton expiré, par exemple) est retentée à chaque passage, et un statut « échoué » est republié chaque minute jusqu'à sa correction.
+**Limites connues** :
+
+- une erreur du runner qui persiste (jeton expiré, par exemple) est retentée à chaque passage, et un statut « échoué » est republié chaque minute jusqu'à sa correction ; aucun commentaire n'est publié dans ce cas, pour ne pas en ajouter un par minute ;
+- chaque build dépose un journal dans le projet GitLab (quelques dizaines de Ko) ; ces fichiers ne sont pas supprimés automatiquement.
 
 ### Nettoyage
 
-Fermer la MR de test (**Close merge request**) et supprimer la branche `test/ci-dev`.
+Fermer la MR de test (**Close merge request**) et supprimer sa branche.
 
 **Dépendances** : US 7.
 

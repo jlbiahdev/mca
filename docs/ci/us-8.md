@@ -63,7 +63,10 @@ Ticket : voir `epic.md`, US 8. Copier les fichiers dans `D:\ci\runner`, en **UTF
        - publie le statut « en cours » sur le commit ;
        - télécharge les sources du commit (zip généré par GitLab, sans git) ;
        - lance le script de build des sources ;
-       - publie le statut « réussi » ou « échoué » ;
+       - dépose le journal du build dans GitLab ;
+       - publie le statut « réussi » ou « échoué », avec l'auteur du commit et
+         un lien vers le journal ;
+       - en cas d'échec, publie dans la MR un commentaire avec les erreurs ;
        - note le commit comme traité.
 
     Une erreur du runner (GitLab injoignable, téléchargement impossible) ne
@@ -293,7 +296,10 @@ function Set-CommitStatus {
         [Parameter(Mandatory)]
         [string] $Description,
 
-        $PipelineId
+        $PipelineId,
+
+        # Lien ouvert en cliquant sur le job dans GitLab (journal du build).
+        [string] $TargetUrl
     )
 
     # GitLab limite la description à 255 caractères.
@@ -310,6 +316,10 @@ function Set-CommitStatus {
 
     if ($PipelineId) {
         $body.pipeline_id = $PipelineId
+    }
+
+    if ($TargetUrl) {
+        $body.target_url = $TargetUrl
     }
 
     $path = 'projects/{0}/statuses/{1}' -f $script:Config.ProjectId, $MergeRequest.sha
@@ -332,6 +342,95 @@ function Set-CommitStatus {
     }
 
     return $pipeline
+}
+
+# Auteur et titre du commit, pour la description du statut et le commentaire.
+# En cas d'erreur, on continue sans ces informations.
+function Get-CommitInfo {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Token,
+
+        [Parameter(Mandatory)]
+        [string] $Commit
+    )
+
+    try {
+        $path = 'projects/{0}/repository/commits/{1}' -f $script:Config.ProjectId, $Commit
+        return Invoke-GitLabApi -Path $path -Token $Token
+    }
+    catch {
+        Write-CiLog "Informations du commit indisponibles : $($_.Exception.Message)" 'ATTENTION'
+        return $null
+    }
+}
+
+# Dépose un fichier dans le projet GitLab (API d'upload, envoi multipart).
+# Invoke-RestMethod ne sait pas envoyer de formulaire multipart en Windows
+# PowerShell 5.1 : on passe par HttpClient. Renvoie la réponse de GitLab
+# (url, full_path, markdown).
+function Publish-GitLabFile {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Token,
+
+        [Parameter(Mandatory)]
+        [string] $FileName,
+
+        [Parameter(Mandatory)]
+        [byte[]] $Content
+    )
+
+    Add-Type -AssemblyName System.Net.Http
+
+    $uri = '{0}/api/v4/projects/{1}/uploads' -f $script:Config.GitLabUrl, $script:Config.ProjectId
+
+    $client = [System.Net.Http.HttpClient]::new()
+    try {
+        $client.DefaultRequestHeaders.Add('PRIVATE-TOKEN', $Token)
+
+        $file = [System.Net.Http.ByteArrayContent]::new($Content)
+        $file.Headers.ContentType = [System.Net.Http.Headers.MediaTypeHeaderValue]::Parse('text/plain')
+
+        # Nom du champ et du fichier entre guillemets : HttpClient les omet, ce
+        # que certains serveurs refusent.
+        $disposition = [System.Net.Http.Headers.ContentDispositionHeaderValue]::new('form-data')
+        $disposition.Name     = '"file"'
+        $disposition.FileName = '"{0}"' -f $FileName
+        $file.Headers.ContentDisposition = $disposition
+
+        $form = [System.Net.Http.MultipartFormDataContent]::new()
+        $form.Add($file)
+
+        $response = $client.PostAsync($uri, $form).GetAwaiter().GetResult()
+        $text = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+
+        if (-not $response.IsSuccessStatusCode) {
+            throw "GitLab refuse le dépôt du fichier ($([int] $response.StatusCode))."
+        }
+
+        return $text | ConvertFrom-Json
+    }
+    finally {
+        $client.Dispose()
+    }
+}
+
+# Publie un commentaire dans la MR.
+function Add-MergeRequestNote {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Token,
+
+        [Parameter(Mandatory)]
+        $MergeRequest,
+
+        [Parameter(Mandatory)]
+        [string] $Text
+    )
+
+    $path = 'projects/{0}/merge_requests/{1}/notes' -f $script:Config.ProjectId, $MergeRequest.iid
+    $null = Invoke-GitLabApi -Path $path -Token $Token -Method Post -Body @{ body = $Text }
 }
 
 # ── Sources ──────────────────────────────────────────────────────────────────
@@ -491,9 +590,10 @@ function Invoke-CiBuild {
 
         return [pscustomobject]@{
             Success  = $false
-            Message  = "Build interrompu après $($script:Config.BuildTimeoutMinutes) min"
-            LogFile  = $outputLog
-            Duration = (Get-Date) - $started
+            Message      = "Build interrompu après $($script:Config.BuildTimeoutMinutes) min"
+            LogFile      = $outputLog
+            ErrorLogFile = $errorLog
+            Duration     = (Get-Date) - $started
         }
     }
 
@@ -509,11 +609,183 @@ function Invoke-CiBuild {
     }
 
     return [pscustomobject]@{
-        Success  = ($exitCode -eq 0)
-        Message  = $message
-        LogFile  = $outputLog
-        Duration = $duration
+        Success      = ($exitCode -eq 0)
+        Message      = $message
+        LogFile      = $outputLog
+        ErrorLogFile = $errorLog
+        Duration     = $duration
     }
+}
+
+# ── Trace du build ───────────────────────────────────────────────────────────
+# Journal complet déposé dans GitLab, et erreurs extraites pour la MR.
+
+# Contenu du journal à déposer : sortie standard, puis sortie d'erreur si elle
+# n'est pas vide.
+function Get-BuildLogContent {
+    param(
+        [Parameter(Mandatory)]
+        $Result
+    )
+
+    $content = [IO.File]::ReadAllBytes($Result.LogFile)
+
+    if ((Test-Path -LiteralPath $Result.ErrorLogFile) -and (Get-Item -LiteralPath $Result.ErrorLogFile).Length -gt 0) {
+        $separator = [Text.Encoding]::UTF8.GetBytes("`r`n===== Sortie d'erreur =====`r`n")
+        $content = [byte[]] ($content + $separator + [IO.File]::ReadAllBytes($Result.ErrorLogFile))
+    }
+
+    return , $content
+}
+
+# Dépose le journal dans GitLab et renvoie son adresse complète et son lien
+# Markdown. En cas d'échec, le build reste valable : on continue sans lien.
+function Publish-BuildLog {
+    param(
+        [Parameter(Mandatory)]
+        [string] $Token,
+
+        [Parameter(Mandatory)]
+        $MergeRequest,
+
+        [Parameter(Mandatory)]
+        $Result
+    )
+
+    try {
+        $upload = Publish-GitLabFile -Token $Token -FileName (Split-Path -Leaf $Result.LogFile) `
+            -Content (Get-BuildLogContent -Result $Result)
+
+        # Selon la version de GitLab, l'adresse est relative à l'instance
+        # (full_path) ou au projet (url).
+        if ($upload.PSObject.Properties['full_path'] -and $upload.full_path) {
+            $url = $script:Config.GitLabUrl + $upload.full_path
+        }
+        else {
+            $projectUrl = $MergeRequest.web_url -replace '/-/merge_requests/\d+$', ''
+            $url = $projectUrl + $upload.url
+        }
+
+        Write-CiLog "Journal du build déposé dans GitLab : $url"
+
+        return [pscustomobject]@{
+            Url      = $url
+            Markdown = $upload.markdown
+        }
+    }
+    catch {
+        Write-CiLog "Journal du build non déposé dans GitLab : $($_.Exception.Message)" 'ATTENTION'
+        return $null
+    }
+}
+
+# Lignes d'erreur du compilateur (« fichier(ligne,col): error CS0246: ... »),
+# sans le chemin du dossier de build ni le projet entre crochets, sans doublon.
+# Sans erreur reconnue (délai dépassé, échec du script), on renvoie la fin des
+# journaux.
+function Get-BuildErrors {
+    param(
+        [Parameter(Mandatory)]
+        $Result,
+
+        [int] $TailLines = 20
+    )
+
+
+    # Chemins affichés relatifs au dossier de build.
+    $root = $script:Config.BuildRoot + [IO.Path]::DirectorySeparatorChar
+
+    $lines = @(
+        foreach ($file in @($Result.LogFile, $Result.ErrorLogFile)) {
+            if (Test-Path -LiteralPath $file) {
+                Get-Content -LiteralPath $file -Encoding UTF8
+            }
+        }
+    )
+
+    $errors = @(
+        $lines |
+            Where-Object { $_ -match ':\s*error\s+[A-Z]+\d+\s*:' } |
+            ForEach-Object { ($_.Trim() -replace '\s*\[[^\]]+\]$', '').Replace($root, '') } |
+            Select-Object -Unique
+    )
+
+    if ($errors.Count -gt 0) {
+        return [pscustomobject]@{ Found = $true; Lines = $errors }
+    }
+
+    $tail = @($lines | Where-Object { $_.Trim() } | Select-Object -Last $TailLines)
+    return [pscustomobject]@{ Found = $false; Lines = $tail }
+}
+
+# Commentaire publié dans la MR en cas d'échec.
+function New-FailureNote {
+    param(
+        [Parameter(Mandatory)]
+        $MergeRequest,
+
+        [Parameter(Mandatory)]
+        $Result,
+
+        [Parameter(Mandatory)]
+        $BuildErrors,
+
+        $CommitInfo,
+
+        $PipelineId,
+
+        $LogLink,
+
+        [int] $MaxLines = 50
+    )
+
+    $commit = $MergeRequest.sha.Substring(0, 8)
+    if ($CommitInfo) {
+        $commitText = "``$commit`` « $($CommitInfo.title) » de $($CommitInfo.author_name)"
+    }
+    else {
+        $commitText = "``$commit``"
+    }
+
+    $note = [Text.StringBuilder]::new()
+    $null = $note.AppendLine("**$($script:Config.StatusName) : $($Result.Message)** pour le commit $commitText.")
+    $null = $note.AppendLine()
+    $null = $note.AppendLine("- MR de $($MergeRequest.author.name)")
+    $null = $note.AppendLine(('- Durée : {0:mm\:ss}, sur {1} (environnement {2})' -f $Result.Duration, $env:COMPUTERNAME, $script:Config.BuildEnvironment))
+
+    if ($PipelineId) {
+        $null = $note.AppendLine("- Pipeline externe : #$PipelineId")
+    }
+
+    if ($LogLink) {
+        $null = $note.AppendLine("- Journal complet : $($LogLink.Markdown)")
+    }
+    else {
+        $null = $note.AppendLine("- Journal complet : non déposé dans GitLab, voir ``$($Result.LogFile)`` sur $env:COMPUTERNAME")
+    }
+
+    $null = $note.AppendLine()
+
+    if ($BuildErrors.Found) {
+        $null = $note.AppendLine("Erreurs ($($BuildErrors.Lines.Count)) :")
+    }
+    else {
+        $null = $note.AppendLine('Aucune erreur de compilation reconnue. Dernières lignes du journal :')
+    }
+
+    $null = $note.AppendLine()
+    $null = $note.AppendLine('```text')
+    foreach ($line in ($BuildErrors.Lines | Select-Object -First $MaxLines)) {
+        $null = $note.AppendLine($line)
+    }
+    $null = $note.AppendLine('```')
+
+    if ($BuildErrors.Lines.Count -gt $MaxLines) {
+        $null = $note.AppendLine()
+        $null = $note.AppendLine("… et $($BuildErrors.Lines.Count - $MaxLines) autre(s) : voir le journal complet.")
+    }
+
+    return $note.ToString()
 }
 
 # ── Commits traités ──────────────────────────────────────────────────────────
@@ -565,6 +837,8 @@ function Invoke-MergeRequestBuild {
     $commit = $MergeRequest.sha
     Write-CiLog "MR !$($MergeRequest.iid) « $($MergeRequest.title) » ($($MergeRequest.source_branch)) : commit $commit"
 
+    $commitInfo = Get-CommitInfo -Token $Token -Commit $commit
+
     $pipelineId = Set-CommitStatus -Token $Token -MergeRequest $MergeRequest `
         -State running -Description "Build en cours sur $env:COMPUTERNAME"
 
@@ -587,20 +861,52 @@ function Invoke-MergeRequestBuild {
         throw
     }
 
-    $description = '{0} en {1:mm\:ss} sur {2}. Journal : {3}' -f `
-        $result.Message, $result.Duration, $env:COMPUTERNAME, $result.LogFile
+    $logLink = Publish-BuildLog -Token $Token -MergeRequest $MergeRequest -Result $result
+
+    if ($commitInfo) {
+        $author = "Commit de $($commitInfo.author_name)"
+    }
+    else {
+        $author = "MR de $($MergeRequest.author.name)"
+    }
+
+    $where = '{0:mm\:ss} sur {1}' -f $result.Duration, $env:COMPUTERNAME
 
     if ($result.Success) {
         $state = 'success'
+        $description = "$($result.Message) en $where. $author."
         Write-CiLog "MR !$($MergeRequest.iid) : $($result.Message)"
     }
     else {
         $state = 'failed'
         Write-CiLog "MR !$($MergeRequest.iid) : $($result.Message), voir $($result.LogFile)" 'ATTENTION'
+
+        # La première erreur vient en dernier : GitLab limite la description à
+        # 255 caractères, c'est donc elle qui est tronquée si besoin.
+        $buildErrors = Get-BuildErrors -Result $result
+        if ($buildErrors.Found) {
+            $description = "$($result.Message), $($buildErrors.Lines.Count) erreur(s), en $where. $author. 1re erreur : $($buildErrors.Lines[0])"
+        }
+        else {
+            $description = "$($result.Message) en $where. $author."
+        }
+
+        try {
+            $note = New-FailureNote -MergeRequest $MergeRequest -Result $result -BuildErrors $buildErrors `
+                -CommitInfo $commitInfo -PipelineId $pipelineId -LogLink $logLink
+            Add-MergeRequestNote -Token $Token -MergeRequest $MergeRequest -Text $note
+            Write-CiLog "MR !$($MergeRequest.iid) : commentaire d'échec publié."
+        }
+        catch {
+            Write-CiLog "Commentaire d'échec non publié : $($_.Exception.Message)" 'ATTENTION'
+        }
     }
 
+    $linkUrl = $null
+    if ($logLink) { $linkUrl = $logLink.Url }
+
     $null = Set-CommitStatus -Token $Token -MergeRequest $MergeRequest -PipelineId $pipelineId `
-        -State $state -Description $description
+        -State $state -Description $description -TargetUrl $linkUrl
 
     Add-Processed -Commit $commit -MergeRequestIid $MergeRequest.iid -Result $state
 }
