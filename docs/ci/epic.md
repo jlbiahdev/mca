@@ -612,21 +612,12 @@ Fermer la MR de test (**Close merge request**) et supprimer sa branche.
 
 **Code** : étape US 10 (`us-10.md` : runner, configuration, `install-task.ps1`, `diag-token.ps1` ; `us-10-scripts.md` : scripts du dépôt). À chaque passage, après la CI :
 
-- le runner lit le dernier commit de `main` ; s'il n'est pas dans `processed-cd.txt`, il publie le statut `cd-int` « en cours » et en déduit la version ;
+- le runner lit le dernier commit de `main` ; s'il n'est pas dans `processed-cd.txt`, il vérifie par l'API que ce commit contient les scripts de package et de push. Sinon (commit antérieur à l'introduction de la CD), il le note `ignored`, sans statut ni téléchargement ;
+- il publie le statut `cd-int` « en cours » et en déduit la version ;
 - il lit la clé Artifactory (variable GitLab), télécharge les sources, lance `int/package.ps1` puis `int/push-artifactory.ps1`, en transmettant la clé par l'environnement du processus (jamais en ligne de commande ni dans un fichier) ;
 - il dépose les journaux du package et du push dans GitLab, publie « réussi » ou « échoué », et note le commit dans `processed-cd.txt` ;
 - une erreur du runner (variable illisible, téléchargement impossible) publie « échoué » sans noter le commit : il est repris au passage suivant. La clé est lue avant le téléchargement, pour ne pas télécharger à chaque passage si elle est inaccessible ;
 - une erreur de la CI n'empêche pas la CD, et inversement.
-
-### Avant tout : les scripts dans `main`
-
-Le runner de l'US 10 publie le dernier commit de `main` dès son premier passage : `main` doit déjà contenir les scripts de package et de push. Tant que l'ancienne tâche tourne, c'est elle qui construit la MR.
-
-1. Sur une branche, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Pousser la branche et **créer la MR**.
-2. Attendre que l'ancienne tâche construise la MR (statut `ci-dev` « réussi » : « Pipelines must succeed » l'exige), puis **fusionner** la MR.
-3. Vérifier dans GitLab que `main` contient `src/scripts/devops/int/package.ps1`.
-
-Ne passer à la suite qu'une fois ces trois points faits : sinon, le nouveau runner échoue sur `Script introuvable dans les sources (Package)` et, la tâche installée, retélécharge les sources à chaque passage.
 
 ### Dans GitLab
 
@@ -677,7 +668,7 @@ Ne passer à la suite qu'une fois ces trois points faits : sinon, le nouveau run
    powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\cicd-int-poc.ps1
    ```
 
-   Résultat attendu : `Branche main : commit <commit> à publier`, `Pipeline externe GitLab : <n>, version 1.0.<n>`, les étapes Package et Push, puis `Branche main : version 1.0.<n> publiée sur Artifactory`.
+   Résultat attendu : `Branche main : commit <commit> ignoré, scripts absents du commit : ...` (`main` ne contient pas encore les scripts de publication), et le commit noté `ignored` dans `processed-cd.txt`.
 
 6. Installer la tâche :
 
@@ -688,6 +679,12 @@ Ne passer à la suite qu'une fois ces trois points faits : sinon, le nouveau run
    Résultat attendu : la tâche `Styx.CicdIntPoc`. Au passage suivant, le journal du jour (`logs\cicd-int-poc-<date>.log`) indique `Aucune MR à traiter (<n> ouverte(s)), main à jour.`
 
 7. Dans GitLab, révoquer l'ancien jeton `ci-int-poc-api`.
+
+### Dans le dépôt : les scripts de publication
+
+1. Sur une branche, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Pousser la branche et créer la MR.
+2. Le runner construit la MR (statut `ci-int`). Une fois le statut « réussi », fusionner la MR.
+3. Au passage suivant, le runner publie le commit de fusion : `Branche main : version 1.0.<n> publiée sur Artifactory`.
 
 ### Vérifications
 
