@@ -618,6 +618,16 @@ Fermer la MR de test (**Close merge request**) et supprimer sa branche.
 - une erreur du runner (variable illisible, téléchargement impossible) publie « échoué » sans noter le commit : il est repris au passage suivant. La clé est lue avant le téléchargement, pour ne pas télécharger à chaque passage si elle est inaccessible ;
 - une erreur de la CI n'empêche pas la CD, et inversement.
 
+### Avant tout : les scripts dans `main`
+
+Le runner de l'US 10 publie le dernier commit de `main` dès son premier passage : `main` doit déjà contenir les scripts de package et de push. Tant que l'ancienne tâche tourne, c'est elle qui construit la MR.
+
+1. Sur une branche, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Pousser la branche et **créer la MR**.
+2. Attendre que l'ancienne tâche construise la MR (statut `ci-dev` « réussi » : « Pipelines must succeed » l'exige), puis **fusionner** la MR.
+3. Vérifier dans GitLab que `main` contient `src/scripts/devops/int/package.ps1`.
+
+Ne passer à la suite qu'une fois ces trois points faits : sinon, le nouveau runner échoue sur `Script introuvable dans les sources (Package)` et, la tâche installée, retélécharge les sources à chaque passage.
+
 ### Dans GitLab
 
 1. **Nouveau jeton** : **Settings > Access tokens > Add new token**, avec les mêmes valeurs qu'à l'US 7, sauf :
@@ -644,8 +654,6 @@ Fermer la MR de test (**Close merge request**) et supprimer sa branche.
    | Value | la clé Artifactory |
 
    `Masked` impose un format à la valeur (au moins 8 caractères, sans espace) : une clé Artifactory le respecte en général. Si GitLab refuse la valeur, le signaler avant d'aller plus loin.
-
-3. **Dépôt** : par une MR, ajouter `src/scripts/devops/int/package.ps1` et `src/scripts/devops/int/push-artifactory.ps1` (`us-10-scripts.md`), et renseigner `Artifactory.BaseUrl` et `Artifactory.Repository` dans `src/scripts/devops/config/int.psd1` (mêmes valeurs que `dev.psd1`). Fusionner cette MR **avant** d'installer le code de l'US 10 : le premier passage du nouveau runner publiera ce commit de `main`.
 
 ### Sur la machine de POC
 
