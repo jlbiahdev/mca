@@ -347,8 +347,37 @@ Rien à faire : le scope `read_repository` du jeton (US 1) autorise le télécha
 
 ### Sur la machine de POC
 
-1. Installer le code de l'US 5 (voir « Mettre à jour le code à chaque US »).
-2. Dans GitLab, faire un nouveau commit sur `test/ci-dev`, puis attendre une minute.
+Console PowerShell **administrateur**, ouverte avec le compte du runner.
+
+1. Installer le code de l'US 5 (voir « Mettre à jour le code à chaque US »), ainsi que `protect-token.ps1`, `diag-token.ps1` et le nouvel `install-task.ps1` (voir le commentaire de l'US 4 : jeton chiffré au niveau de la machine, tâche sans session ni mot de passe).
+
+2. Rechiffrer le jeton au niveau de la machine, à partir du fichier de l'US 1, sans le recoller :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\protect-token.ps1 -FromClixml D:\ci\runner\gitlab-token.xml
+   ```
+
+   Résultat attendu : `Jeton chiffré dans D:\ci\runner\gitlab-token.dat`, puis `Lecture autorisée : SYSTEM, Administrateurs, <DOMAINE>\<compte>`.
+
+3. Vérifier que le fichier contient le bon jeton :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\diag-token.ps1
+   ```
+
+   Résultat attendu : `gitlab-token.dat` et `gitlab-token.xml` ont la même empreinte, avec le nom `ci-dev-poc`.
+
+4. Recréer la tâche :
+
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\install-task.ps1
+   ```
+
+   Résultat attendu : `Exécution : session ouverte ou fermée, sans mot de passe enregistré`.
+
+5. Supprimer `D:\ci\runner\gitlab-token.xml`, qui ne sert plus.
+
+6. Dans GitLab, faire un nouveau commit sur `test/ci-dev`, puis attendre une minute.
 
 ### Vérifications
 
@@ -463,7 +492,7 @@ La publication d'un statut demande le scope `api`, que le jeton de l'US 1 n'a pa
 
 ### Sur la machine de POC
 
-1. Chiffrer le nouveau jeton à la place de l'ancien, avec le compte du runner (`protect-token.ps1`, livré à l'US 4) :
+1. Chiffrer le nouveau jeton à la place de l'ancien, avec le compte du runner (`protect-token.ps1`, livré à l'US 5) :
 
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\protect-token.ps1

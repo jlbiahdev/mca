@@ -34,7 +34,9 @@ Le jeton chiffré la première fois n'était pas celui du runner : il a été re
 - `protect-token.ps1 -FromClixml <fichier>` reprend un jeton déjà chiffré par `Export-Clixml`, sans le recoller.
 - À retenir : ne pas conserver de jetons en clair dans des notes ; l'ancien jeton `create_runner_pat` est à révoquer.
 
-**Code concerné, à partir de cette US**
+**Code concerné, à partir de l'US 5**
+
+L'US 4 a été validée avec le code de son étape ; ces changements sont livrés avec le code de l'US 5 :
 
 - `protect-token.ps1` (nouveau) et `diag-token.ps1` (nouveau) ;
 - `install-task.ps1` : mode par défaut sans session ni mot de passe, option `-InteractiveOnly` ;
