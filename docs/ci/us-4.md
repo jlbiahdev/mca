@@ -13,9 +13,9 @@ Ticket : voir `epic.md`, US 4. Copier les fichiers dans `D:\ci\runner`, en **UTF
     # Identifiant numérique du projet (page d'accueil du projet, menu « ⋮ »).
     ProjectId  = 0
 
-    # Jeton GitLab chiffré par Windows (DPAPI) : lisible uniquement par le
-    # compte qui l'a créé, sur cette machine.
-    TokenFile  = 'D:\ci\runner\gitlab-token.xml'
+    # Jeton GitLab chiffré par protect-token.ps1 (DPAPI, niveau machine) ;
+    # lecture limitée à SYSTEM, aux administrateurs et au compte du runner.
+    TokenFile  = 'D:\ci\runner\gitlab-token.dat'
 
     # ── Runner ──────────────────────────────────────────────────────────────
     # Dossier du runner : script, configuration, journaux, commits traités.
@@ -135,21 +135,40 @@ function Initialize-CiLog {
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
 
+# Le jeton est chiffré par protect-token.ps1 au niveau de la machine (DPAPI),
+# ce qui permet à la tâche de le lire sans session ouverte ni mot de passe
+# enregistré. Les droits du fichier limitent sa lecture au compte du runner.
 function Get-GitLabToken {
     $path = $script:Config.TokenFile
 
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Fichier du jeton GitLab introuvable : $path"
+        throw "Fichier du jeton GitLab introuvable : $path (le créer avec protect-token.ps1)"
     }
 
     try {
-        $secureToken = Import-Clixml -LiteralPath $path
+        $encoded = (Get-Content -LiteralPath $path -Raw -Encoding ASCII).Trim()
     }
     catch {
-        throw "Impossible de déchiffrer le jeton GitLab. Le fichier doit avoir été créé par le compte qui lance ce script, sur cette machine."
+        throw "Lecture du jeton GitLab refusée ($path) : le compte qui lance ce script doit être autorisé par protect-token.ps1."
     }
 
-    return [Net.NetworkCredential]::new('', $secureToken).Password
+    try {
+        Add-Type -AssemblyName System.Security
+        $entropy   = [Text.Encoding]::UTF8.GetBytes('Styx.CiDev')
+        $encrypted = [Convert]::FromBase64String($encoded)
+        $plain     = [Security.Cryptography.ProtectedData]::Unprotect(
+            $encrypted, $entropy, [Security.Cryptography.DataProtectionScope]::LocalMachine)
+    }
+    catch {
+        throw "Impossible de déchiffrer le jeton GitLab ($path) : le recréer avec protect-token.ps1 sur cette machine."
+    }
+
+    try {
+        return [Text.Encoding]::UTF8.GetString($plain)
+    }
+    finally {
+        [Array]::Clear($plain, 0, $plain.Length)
+    }
 }
 
 function Invoke-GitLabApi {

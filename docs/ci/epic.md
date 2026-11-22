@@ -17,7 +17,7 @@ La création de runners GitLab est bloquée sur l'instance. Le runner est donc u
 - **Pas de git sur la machine** : les sources d'un commit sont téléchargées en zip par l'API GitLab.
 - **Configuration hors du code** : tout ce qui varie d'une machine à l'autre est dans `ci-dev.psd1`, à côté du script. Ce fichier ne contient aucun secret.
 - **Même build qu'en local** : le runner lance le script de build des sources téléchargées (`devops\dev\build.ps1 -RepositoryRoot <sources>`). C'est la version du script livrée avec le commit qui compile ce commit.
-- **Jeton chiffré** : le jeton GitLab est chiffré par Windows (DPAPI). Seul le compte qui l'a chiffré, sur cette machine, peut le relire : c'est aussi le compte de la tâche planifiée.
+- **Jeton chiffré** : le jeton GitLab est chiffré par Windows (DPAPI) au niveau de la machine, par `protect-token.ps1`. Les droits du fichier limitent sa lecture à SYSTEM, aux administrateurs et au compte du runner. Ce choix permet à la tâche de tourner sans session ouverte ni mot de passe enregistré (voir US 2).
 
 ## Découpage
 
@@ -39,7 +39,7 @@ Dossiers sur la machine de POC :
 
 | Dossier | Contenu |
 |---|---|
-| `D:\ci\runner` | `ci-dev.ps1`, `ci-dev.psd1`, `install-task.ps1`, jeton chiffré, `processed.txt`, `logs\` (journal du jour), `builds\` (journal de chaque build) |
+| `D:\ci\runner` | `ci-dev.ps1`, `ci-dev.psd1`, `protect-token.ps1`, `install-task.ps1`, jeton chiffré (`gitlab-token.dat`), `processed.txt`, `logs\` (journal du jour), `builds\` (journal de chaque build) |
 | `D:\ci\build` | Sources du commit en cours (vidé à chaque commit) |
 
 ## Mettre à jour le code à chaque US
@@ -70,7 +70,7 @@ Cette procédure sert à toutes les US.
 
 **Contexte** : avant toute automatisation, vérifier que la machine de POC joint GitLab avec un jeton, et que ce jeton est stocké sans jamais apparaître en clair.
 
-**Code** : `ci-dev.ps1` et `ci-dev.psd1`, étape US 1.
+**Code** : `ci-dev.ps1`, `ci-dev.psd1` et `protect-token.ps1`, étape US 1.
 
 **Prérequis** : rôle **Maintainer** sur le projet dans GitLab (nécessaire pour créer un jeton de projet).
 
@@ -125,15 +125,15 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 
    Résultat attendu : les deux dossiers sont listés.
 
-4. Chiffrer le jeton :
+4. Installer le code de l'US 1 (voir « Mettre à jour le code à chaque US »), avec l'adresse et l'identifiant relevés dans GitLab, et copier `protect-token.ps1` dans `D:\ci\runner` de la même façon.
+
+5. Chiffrer le jeton :
 
    ```powershell
-   Read-Host "Jeton GitLab" -AsSecureString | Export-Clixml -Path D:\ci\runner\gitlab-token.xml
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\protect-token.ps1
    ```
 
-   Coller le jeton à l'invite (rien ne s'affiche), puis Entrée. Résultat attendu : aucun message, et le fichier `D:\ci\runner\gitlab-token.xml` existe. Vider ensuite le presse-papiers (copier n'importe quel autre texte).
-
-5. Installer le code de l'US 1 (voir « Mettre à jour le code à chaque US »), avec l'adresse et l'identifiant relevés dans GitLab.
+   Coller le jeton à l'invite (rien ne s'affiche), puis Entrée. Résultat attendu : `Jeton chiffré dans D:\ci\runner\gitlab-token.dat`, puis `Lecture autorisée : SYSTEM, Administrateurs, <DOMAINE>\<compte>`. Vider ensuite le presse-papiers (copier n'importe quel autre texte).
 
 6. Lancer le script :
 
@@ -145,8 +145,15 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 
 ### Vérifications
 
-1. Ouvrir `D:\ci\runner\gitlab-token.xml` dans le Bloc-notes : le contenu est chiffré (une longue suite de chiffres et de lettres), le jeton n'y figure pas en clair.
-2. Avec une erreur volontaire dans `ProjectId` (par exemple `999999`), le script affiche `Ressource GitLab introuvable (404)`. Remettre la bonne valeur.
+1. Ouvrir `D:\ci\runner\gitlab-token.dat` dans le Bloc-notes : le contenu est chiffré (une longue suite de chiffres et de lettres), le jeton n'y figure pas en clair.
+2. Vérifier les droits du fichier :
+
+   ```powershell
+   (Get-Acl D:\ci\runner\gitlab-token.dat).Access | Select-Object IdentityReference, FileSystemRights
+   ```
+
+   Résultat attendu : trois lignes seulement, SYSTEM, Administrateurs et le compte du runner, chacune avec `FullControl`.
+3. Avec une erreur volontaire dans `ProjectId` (par exemple `999999`), le script affiche `Ressource GitLab introuvable (404)`. Remettre la bonne valeur.
 
 **Fini quand** :
 
@@ -167,10 +174,12 @@ Console PowerShell, **connecté avec le compte qui fera tourner la tâche planif
 
 **Deux modes d'exécution** :
 
-| Mode | Commande | La tâche tourne… | Mot de passe |
-|---|---|---|---|
-| Par défaut | `install-task.ps1` | quand la session du compte est ouverte, même verrouillée ; elle s'arrête à la déconnexion ou au redémarrage, jusqu'à la connexion suivante | non enregistré |
-| Session fermée | `install-task.ps1 -RunWhenLoggedOff` | tout le temps | enregistré par Windows ; une stratégie de l'entreprise peut l'interdire (erreur `0x80070520`) |
+| Mode | Commande | La tâche tourne… |
+|---|---|---|
+| Par défaut | `install-task.ps1` | tout le temps : session ouverte ou fermée, et après un redémarrage, sans mot de passe enregistré (option « Do not store password » du Planificateur) |
+| Session ouverte | `install-task.ps1 -InteractiveOnly` | quand la session du compte est ouverte, même verrouillée ; elle s'arrête à la fermeture de la session ou au redémarrage |
+
+Le mode par défaut fonctionne parce que le jeton est chiffré au niveau de la machine (US 1). Il n'accède pas aux ressources réseau authentifiées par le compte Windows (partages, proxy NTLM), ce qui ne gêne pas les appels à l'API GitLab, authentifiés par le jeton. Le mode avec mot de passe enregistré n'est pas proposé : la stratégie du poste l'interdit (erreur `0x80070520`, « A specified logon session does not exist »).
 
 ### Dans GitLab
 
@@ -178,7 +187,7 @@ Rien à faire.
 
 ### Sur la machine de POC
 
-Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jeton).
+Console PowerShell **administrateur**, ouverte avec le compte du runner (celui autorisé à lire le jeton à l'US 1).
 
 1. Installer le code de l'US 2 (voir « Mettre à jour le code à chaque US »), et copier `install-task.ps1` dans `D:\ci\runner` de la même façon.
 
@@ -201,12 +210,12 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
    ```text
    Tâche Styx.CiDev créée, état : Ready
      Compte    : <DOMAINE>\<utilisateur>
-     Exécution : seulement quand la session de ce compte est ouverte (même verrouillée)
+     Exécution : session ouverte ou fermée, sans mot de passe enregistré
      Script    : D:\ci\runner\ci-dev.ps1
      Fréquence : toutes les 1 minute(s)
    ```
 
-   Pour le mode session fermée, ajouter `-RunWhenLoggedOff` : le mot de passe du compte est demandé. En cas d'erreur `0x80070520`, la stratégie de l'entreprise l'interdit pour ce compte : garder le mode par défaut, ou demander une exception à cette stratégie.
+   Pour le mode session ouverte, ajouter `-InteractiveOnly`.
 
 ### Vérifications
 
@@ -237,7 +246,7 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
 **En cas d'échec** :
 
 - `LastTaskResult` vaut `267011` : la tâche ne s'est pas encore lancée, attendre une minute ;
-- `LastTaskResult` signale un refus d'ouverture de session (mode `-RunWhenLoggedOff`) : le compte n'a pas le droit **Ouvrir une session en tant que tâche** sur la machine ; ce droit est accordé par un administrateur ;
+- le journal indique `Lecture du jeton GitLab refusée` ou `Impossible de déchiffrer le jeton GitLab` : relancer `protect-token.ps1` avec le compte du runner ;
 - `LastTaskResult` vaut `1` : le script a rencontré une erreur, voir le journal du jour ;
 - le journal ne contient pas les passages de la tâche : lancer le script à la main dans une console **non administrateur** pour voir l'erreur (par exemple `Verrou impossible à créer … Access … denied` : la tâche n'a pas les droits d'écriture sur `D:\ci\runner` ; recréer la tâche avec `install-task.ps1`, qui la lance avec les privilèges les plus élevés).
 
@@ -248,10 +257,8 @@ Console PowerShell ouverte avec le compte de l'US 1 (celui qui a chiffré le jet
 - la tâche se lance chaque minute (`LastTaskResult` = `0`) ;
 - aucune fenêtre ne s'affiche lors des passages ;
 - le journal contient une ligne par passage ;
-- le mode retenu (par défaut ou session fermée) est noté dans ce ticket ;
+- après une fermeture de session (« Se déconnecter », pas seulement fermer le Bureau à distance), le journal continue de recevoir une ligne par minute ;
 - un lancement à la main pendant qu'un passage tourne affiche `Un passage est déjà en cours : rien à faire.` (difficile à provoquer à cette étape, où un passage dure moins d'une seconde : à revérifier pendant un build, à l'US 6).
-
-**Attention** : en mode session fermée, la tâche garde le mot de passe du compte. S'il change, la tâche échoue : relancer `install-task.ps1 -RunWhenLoggedOff`. Le jeton chiffré ne dépend pas du mot de passe.
 
 **Dépendances** : US 1.
 
@@ -463,13 +470,13 @@ La publication d'un statut demande le scope `api`, que le jeton de l'US 1 n'a pa
 
 ### Sur la machine de POC
 
-1. Chiffrer le nouveau jeton à la place de l'ancien, avec le compte de la tâche :
+1. Chiffrer le nouveau jeton à la place de l'ancien, avec le compte du runner :
 
    ```powershell
-   Read-Host "Jeton GitLab" -AsSecureString | Export-Clixml -Path D:\ci\runner\gitlab-token.xml
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\runner\protect-token.ps1
    ```
 
-   Résultat attendu : aucun message.
+   Résultat attendu : `Jeton chiffré dans D:\ci\runner\gitlab-token.dat`.
 
 2. Installer le code de l'US 7 (voir « Mettre à jour le code à chaque US »).
 
@@ -557,14 +564,14 @@ Fermer la MR de test (**Close merge request**) et supprimer la branche `test/ci-
 
 1. **Présentation** : ce que fait le runner, en une page, avec les dossiers et les fichiers.
 2. **Prérequis** : rôle dans GitLab, compte Windows de la tâche et son droit d'ouverture de session, PowerShell 5.1, SDK .NET 8, accès réseau à GitLab et aux sources NuGet.
-3. **Installation** : dans GitLab (adresse, identifiant du projet, jeton `api`), puis sur la machine (dossiers, jeton chiffré, scripts, configuration, tâche planifiée avec `install-task.ps1` et le mode retenu). Étapes numérotées, une commande par bloc, résultat attendu après chaque commande.
+3. **Installation** : dans GitLab (adresse, identifiant du projet, jeton `api`), puis sur la machine (dossiers, scripts, configuration, jeton chiffré avec `protect-token.ps1`, tâche planifiée avec `install-task.ps1`). Étapes numérotées, une commande par bloc, résultat attendu après chaque commande.
 4. **Vérification de l'installation** : une MR de test, du commit au statut dans la MR.
 5. **Exploitation** :
    - lire le journal du jour et le journal d'un build ;
    - retraiter un commit ;
    - arrêter et relancer le runner ;
-   - renouveler le jeton avant son expiration ;
-   - recréer la tâche après un changement de mot de passe du compte (`install-task.ps1`) ;
+   - renouveler le jeton avant son expiration (`protect-token.ps1`) ;
+   - recréer la tâche (`install-task.ps1`) ;
    - mettre à jour les scripts.
 6. **Dépannage** : un tableau message affiché → cause → action (jeton refusé 401, accès refusé 403, ressource 404, ouverture de session refusée, script de build introuvable, build interrompu, passage déjà en cours).
 7. **Configuration** : rôle de chaque clé de `ci-dev.psd1`.
