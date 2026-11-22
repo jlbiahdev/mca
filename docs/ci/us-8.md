@@ -31,8 +31,9 @@ Ticket : voir `epic.md`, US 8. Copier les fichiers dans `D:\ci\runner`, en **UTF
     BuildScript         = 'src\scripts\devops\dev\build.ps1'
     BuildConfiguration  = 'Release'
 
-    # Environnement transmis au script de build (devops\config\<env>.psd1).
-    BuildEnvironment    = 'dev'
+    # Environnement transmis au script de build
+    # (src\scripts\devops\config\<env>.psd1).
+    BuildEnvironment    = 'int'
 
     # Au-delà, le build est arrêté et déclaré en échec.
     BuildTimeoutMinutes = 30

@@ -413,13 +413,24 @@ Console PowerShell **administrateur**, ouverte avec le compte du runner.
 
 ## US 6 — Build
 
-**Contexte** : le runner compile les sources avec le même script qu'en local : `src\scripts\devops\dev\build.ps1 -RepositoryRoot D:\ci\build`, en Release, avec l'environnement `dev`.
+**Contexte** : le runner compile les sources avec le même script qu'en local : `src\scripts\devops\dev\build.ps1 -RepositoryRoot D:\ci\build`, en Release, avec l'environnement `int`. La machine de POC n'a pas git : le script doit recevoir la racine des sources (`-RepositoryRoot`) au lieu de la demander à git, comme le font les scripts améliorés (`build.ps1` et `StyxBuild.psm1`) ; ils lisent leur configuration dans `src\scripts\devops\config\<env>.psd1`.
 
 **Code** : étape US 6. Ajouts : clés `BuildScript`, `BuildConfiguration`, `BuildEnvironment` et `BuildTimeoutMinutes` dans `ci-dev.psd1` ; lancement du build (`Invoke-CiBuild`), dont la sortie va dans `D:\ci\runner\builds\<date>-<commit>.log`. Le commit est noté dans `processed.txt` avec son résultat (`success` ou `failed`).
 
 ### Dans GitLab
 
-Rien à faire.
+Ajouter au dépôt, par une MR (branche de travail, puis merge dans `main`) :
+
+| Fichier du dépôt | Contenu |
+|---|---|
+| `src/scripts/devops/dev/build.ps1` | script de build amélioré (`-RepositoryRoot`, sans git) |
+| `src/scripts/devops/modules/StyxBuild.psm1` | module commun amélioré |
+| `src/scripts/devops/config/int.psd1` | configuration de la machine de POC (valeurs `XXXXX` à renseigner) |
+| `src/scripts/devops/config/dev.psd1` | configuration du poste de dev, si elle n'existe pas encore (valeurs réelles) |
+
+Les fichiers sont dans `us-6-scripts.md`. Si `run_all.ps1` et `stop_all.ps1` du dépôt sont antérieurs au nouveau module, les mettre à jour dans la même MR, sinon ils ne fonctionneront plus sur les postes de dev.
+
+Rebaser ensuite la branche de la MR de test (`test/ci-dev`) sur `main`, pour que ses commits contiennent ces scripts.
 
 ### Sur la machine de POC
 
@@ -436,7 +447,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 2. Compiler une fois à la main les sources déposées à l'US 5, pour vérifier la restauration NuGet et le build avec ce compte :
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment dev
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment int
    ```
 
    Résultat attendu : le build se termine par un message de succès. En cas d'échec de la restauration (sources NuGet inaccessibles), le signaler : le runner échouerait de la même façon.
