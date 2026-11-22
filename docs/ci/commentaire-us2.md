@@ -50,4 +50,4 @@ Point à vérifier à l'US 8 : on ne sait pas encore si `conhost` transmet le co
 
 Mode session ouverte validé : la tâche `Styx.CiDev` se lance chaque minute, sans fenêtre, et chaque passage est écrit dans le journal du jour.
 
-Mode par défaut (jeton chiffré au niveau de la machine, « Do not store password ») : à valider, avec une fermeture de session de quelques minutes pendant laquelle le journal doit continuer à recevoir une ligne par minute.
+Mode par défaut (jeton chiffré au niveau de la machine, « Do not store password ») validé : après une fermeture de session (« Sign out »), le journal a continué à recevoir une ligne par minute, et un nouveau commit a été traité pendant que la session était fermée.
