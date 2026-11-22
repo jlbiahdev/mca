@@ -1,17 +1,69 @@
-# US 6 — Scripts de build à ajouter au dépôt styx-poc
+# US 6 — Scripts de build int à ajouter au dépôt styx-poc
 
-À ajouter par une MR dans `src/scripts/devops/`, en **UTF-8 avec BOM** et CRLF. Ce sont les scripts améliorés (PR #12 de sgdesign) : avec `-RepositoryRoot`, ils n'appellent jamais git.
+À ajouter par une MR dans `src/scripts/devops/`, en **UTF-8 avec BOM** et CRLF.
+
+Même chaîne qu'en dev (`build_release` → `build` → `StyxBuild`), dans un dossier `int`, sans git : la racine des sources est fournie par `-RepositoryRoot` (obligatoire) et la configuration est `config/int.psd1`.
 
 Les valeurs `XXXXX` sont masquées : les renseigner avec les vraies valeurs dans le dépôt styx-poc (jamais dans mca).
 
-## src/scripts/devops/dev/build.ps1
+## src/scripts/devops/int/build_release.ps1
 
 ```powershell
 #requires -Version 5.1
 
 <#
 .SYNOPSIS
-    Compile l'intégralité de la solution STYX.
+    Compile toute la solution Styx en Release (environnement d'intégration,
+    sans git).
+
+.PARAMETER RepositoryRoot
+    Racine des sources, obligatoire : en intégration, git n'est pas disponible.
+
+.PARAMETER Environment
+    Nom de l'environnement (devops\config\<Environment>.psd1). Par défaut : int.
+
+.EXAMPLE
+    .\build_release.ps1 -RepositoryRoot D:\ci\build
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [string] $RepositoryRoot,
+
+    [string] $Environment = 'int'
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$buildScript = Join-Path $PSScriptRoot "build.ps1"
+
+if (-not (Test-Path -LiteralPath $buildScript -PathType Leaf)) {
+    Write-Error "Script de build introuvable : $buildScript"
+    exit 1
+}
+
+& $buildScript -Configuration "Release" -RepositoryRoot $RepositoryRoot -Environment $Environment
+
+$exitCode = $LASTEXITCODE
+
+if ($null -eq $exitCode) {
+    $exitCode = 1
+}
+
+exit $exitCode
+```
+
+## src/scripts/devops/int/build.ps1
+
+```powershell
+#requires -Version 5.1
+
+<#
+.SYNOPSIS
+    Compile l'intégralité de la solution STYX (environnement d'intégration,
+    sans git).
 
 .DESCRIPTION
     Le script :
@@ -50,27 +102,26 @@ Les valeurs `XXXXX` sont masquées : les renseigner avec les vraies valeurs dans
     Cette option ne peut pas être utilisée avec -NoRestore.
 
 .PARAMETER RepositoryRoot
-    Racine des sources. Par défaut, la racine du dépôt Git contenant ce script
-    (poste de dev). Le runner fournit le dossier des sources récupérées par
-    l'API GitLab.
+    Racine des sources, obligatoire : en intégration, git n'est pas disponible.
+    Le runner fournit le dossier des sources récupérées par l'API GitLab.
 
 .PARAMETER Environment
-    Nom de l'environnement (devops\config\<Environment>.psd1). Par défaut : dev.
+    Nom de l'environnement (devops\config\<Environment>.psd1). Par défaut : int.
 
 .EXAMPLE
-    .\build.ps1
+    .\build.ps1 -RepositoryRoot D:\ci\build
 
 .EXAMPLE
-    .\build.ps1 -Configuration Release
+    .\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build
 
 .EXAMPLE
-    .\build.ps1 -Configuration Debug -NoClean
+    .\build.ps1 -Configuration Debug -NoClean -RepositoryRoot D:\ci\build
 
 .EXAMPLE
-    .\build.ps1 -Configuration Release -NoRestore
+    .\build.ps1 -Configuration Release -NoRestore -RepositoryRoot D:\ci\build
 
 .EXAMPLE
-    .\build.ps1 -IgnoreFailedSources -DisableNuGetAudit
+    .\build.ps1 -IgnoreFailedSources -DisableNuGetAudit -RepositoryRoot D:\ci\build
 #>
 
 [CmdletBinding()]
@@ -87,9 +138,10 @@ param(
 
     [switch] $DisableNuGetAudit,
 
+    [Parameter(Mandatory)]
     [string] $RepositoryRoot,
 
-    [string] $Environment = 'dev'
+    [string] $Environment = 'int'
 )
 
 Set-StrictMode -Version Latest
@@ -235,6 +287,8 @@ catch {
 ```
 
 ## src/scripts/devops/modules/StyxBuild.psm1
+
+Version qui accepte `-RepositoryRoot` sans appeler git (git n'est utilisé que si la racine n'est pas fournie, comme en dev).
 
 ```powershell
 #requires -Version 5.1
@@ -1329,87 +1383,6 @@ Nouveau : configuration de la machine de POC. Pour le build, seule la section `D
             TaskFlow__CallbackUrl  = 'http://{HostName}:{TaskFlowPort}/taskflow/taskState'
         }
 
-        SecretVariables = @(
-            'ConnectionStrings__StyxConnection'
-        )
-    }
-}
-```
-
-## src/scripts/devops/config/dev.psd1
-
-À ajouter seulement s'il n'existe pas encore dans le dépôt (configuration du poste de dev, valeurs réelles à renseigner).
-
-```powershell
-# Configuration de l'environnement de développement (poste local).
-#
-# Ce fichier ne contient aucun secret : la section Applications.SecretVariables
-# liste uniquement le NOM des variables d'environnement qui doivent porter les
-# secrets (définies sur le poste, ou injectées par le runner depuis GitLab).
-#
-# Les chemins peuvent utiliser des variables d'environnement Windows (%TEMP%).
-# Les valeurs de Applications.Environment peuvent utiliser les marqueurs
-# {HostName}, {BindHost}, {ApiPort}, {AgentPort} et {TaskFlowPort}.
-@{
-    Environment = 'dev'
-
-    Network = @{
-        # Nom d'hôte utilisé dans les URL transmises aux applications.
-        HostName     = 'localhost'
-
-        # Interface d'écoute des composants.
-        BindHost     = '127.0.0.1'
-
-        ApiPort      = 5002
-        AgentPort    = 5200
-        TaskFlowPort = 5100
-    }
-
-    DotNet = @{
-        # Valeurs utilisées par la publication et le packaging.
-        Configuration = 'Release'
-        Runtime       = 'win-x64'
-        SelfContained = $true
-    }
-
-    Paths = @{
-        WorkRoot      = '%TEMP%\styx_build'
-        PackageOutput = '%TEMP%\styx_packages'
-    }
-
-    Share = @{
-        Path       = '\\XXXXX\XXXXX\publish\styx'
-        ExtraFiles = @(
-            'start_all.ps1'
-            'env.ps1'
-        )
-    }
-
-    Artifactory = @{
-        BaseUrl        = 'https://XXXXX'
-        Repository     = 'XXXXX'
-        ApiKeyVariable = 'ARTIFACTORY_API_KEY'
-    }
-
-    Development = @{
-        # Environnement .NET appliqué par run_all.ps1 -Development : .NET y
-        # valide l'injection de dépendances (portées, construction des
-        # services) et charge les user-secrets des projets.
-        Environment = 'Development'
-    }
-
-    Applications = @{
-        # Variables transmises à chaque composant démarré.
-        Environment = @{
-            DOTNET_ENVIRONMENT     = 'Test'
-            ASPNETCORE_ENVIRONMENT = 'Test'
-            TaskFlow__BaseUrl      = 'http://{HostName}:{TaskFlowPort}'
-            TaskFlow__CallbackUrl  = 'http://{HostName}:{TaskFlowPort}/taskflow/taskState'
-        }
-
-        # Variables obligatoires portant un secret, vérifiées par run_all.ps1
-        # (sauf avec -Development, où les user-secrets peuvent les fournir) :
-        # leur valeur n'est jamais lue dans ce fichier ni affichée.
         SecretVariables = @(
             'ConnectionStrings__StyxConnection'
         )

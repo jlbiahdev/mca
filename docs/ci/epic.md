@@ -413,7 +413,7 @@ Console PowerShell **administrateur**, ouverte avec le compte du runner.
 
 ## US 6 — Build
 
-**Contexte** : le runner compile les sources avec le même script qu'en local : `src\scripts\devops\dev\build.ps1 -RepositoryRoot D:\ci\build`, en Release, avec l'environnement `int`. La machine de POC n'a pas git : le script doit recevoir la racine des sources (`-RepositoryRoot`) au lieu de la demander à git, comme le font les scripts améliorés (`build.ps1` et `StyxBuild.psm1`) ; ils lisent leur configuration dans `src\scripts\devops\config\<env>.psd1`.
+**Contexte** : le runner compile les sources comme sur un poste de dev, avec la même chaîne de scripts (`build_release` → `build` → `StyxBuild`), mais dans un dossier `int` : la machine de POC n'a pas git, les scripts `int` reçoivent donc la racine des sources (`-RepositoryRoot`) au lieu de la demander à git, et utilisent la configuration `int` (`src\scripts\devops\config\int.psd1`). Le runner lance `src\scripts\devops\int\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment int`.
 
 **Code** : étape US 6. Ajouts : clés `BuildScript`, `BuildConfiguration`, `BuildEnvironment` et `BuildTimeoutMinutes` dans `ci-dev.psd1` ; lancement du build (`Invoke-CiBuild`), dont la sortie va dans `D:\ci\runner\builds\<date>-<commit>.log`. Le commit est noté dans `processed.txt` avec son résultat (`success` ou `failed`).
 
@@ -423,12 +423,12 @@ Ajouter au dépôt, par une MR (branche de travail, puis merge dans `main`) :
 
 | Fichier du dépôt | Contenu |
 |---|---|
-| `src/scripts/devops/dev/build.ps1` | script de build amélioré (`-RepositoryRoot`, sans git) |
-| `src/scripts/devops/modules/StyxBuild.psm1` | module commun amélioré |
+| `src/scripts/devops/int/build_release.ps1` | build Release en intégration (`-RepositoryRoot` obligatoire) |
+| `src/scripts/devops/int/build.ps1` | build en intégration, sans git (`-RepositoryRoot` obligatoire, environnement `int` par défaut) |
+| `src/scripts/devops/modules/StyxBuild.psm1` | module commun, version qui accepte `-RepositoryRoot` sans appeler git |
 | `src/scripts/devops/config/int.psd1` | configuration de la machine de POC (valeurs `XXXXX` à renseigner) |
-| `src/scripts/devops/config/dev.psd1` | configuration du poste de dev, si elle n'existe pas encore (valeurs réelles) |
 
-Les fichiers sont dans `us-6-scripts.md`. Si `run_all.ps1` et `stop_all.ps1` du dépôt sont antérieurs au nouveau module, les mettre à jour dans la même MR, sinon ils ne fonctionneront plus sur les postes de dev.
+Les fichiers sont dans `us-6-scripts.md`. Si les scripts `dev` du dépôt utilisent une version plus ancienne de `StyxBuild.psm1`, vérifier qu'ils fonctionnent toujours avec celle-ci sur un poste de dev avant le merge.
 
 Rebaser ensuite la branche de la MR de test (`test/ci-dev`) sur `main`, pour que ses commits contiennent ces scripts.
 
@@ -447,7 +447,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 2. Compiler une fois à la main les sources déposées à l'US 5, pour vérifier la restauration NuGet et le build avec ce compte :
 
    ```powershell
-   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\dev\build.ps1 -Configuration Release -RepositoryRoot D:\ci\build -Environment int
+   powershell -NoProfile -ExecutionPolicy Bypass -File D:\ci\build\src\scripts\devops\int\build_release.ps1 -RepositoryRoot D:\ci\build
    ```
 
    Résultat attendu : le build se termine par un message de succès. En cas d'échec de la restauration (sources NuGet inaccessibles), le signaler : le runner échouerait de la même façon.
@@ -460,7 +460,7 @@ Console PowerShell ouverte avec le compte de la tâche.
 
 1. Lire le journal du jour.
 
-   Résultat attendu : `Build : D:\ci\build\src\scripts\devops\dev\build.ps1 (Release)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
+   Résultat attendu : `Build : D:\ci\build\src\scripts\devops\int\build.ps1 (Release)`, `Journal du build : D:\ci\runner\builds\<date>-<commit>.log`, puis `MR !<numéro> : Build réussi`.
 
 2. Lire la fin du journal du build (chemin affiché dans le journal du jour) :
 
