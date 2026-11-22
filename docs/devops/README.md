@@ -10,9 +10,15 @@ Tous les scripts demandent **Windows PowerShell 5.1** et doivent être enregistr
 devops/
 ├── dev/        poste du développeur : build, lancement, arrêt, package, push
 ├── int/        intégration : build, package et push, sans git
-├── cicd/       runner CI/CD d'intégration (tâche planifiée)
+├── cicd/       runner CI/CD d'intégration, téléchargement et déploiement sur les serveurs
+│   ├── 02_download_deploy/   téléchargement du package depuis Artifactory et déploiement
+│   ├── 03_deploy/            déploiement des applications
+│   └── tests_download_deploy/ tests de download_deploy, par jalons
 ├── config/     configuration par environnement (dev.psd1, int.psd1)
 ├── modules/    fonctions communes (StyxBuild, Styx.Processes)
+├── README.md   ce document
+├── runner.md   runner CI/CD : fonctionnement et exploitation
+├── HOWTO.md    runner CI/CD : mise en place sur un autre projet
 ├── env.example.ps1
 ├── mytree.ps1
 └── repair_utf8_bom.ps1
@@ -22,7 +28,7 @@ devops/
 |---|---|---|
 | `dev/` | développeur, sur son poste | `dev/README.md` |
 | `int/` | appelé par le runner sur la machine d'intégration | ci-dessous |
-| `cicd/` | équipe qui exploite ou installe le runner | `cicd/README.md`, `cicd/HOWTO.md` |
+| `cicd/` | équipe qui exploite le runner ou déploie sur les serveurs | `runner.md`, `HOWTO.md`, et le README de chaque sous-dossier |
 | `config/` | tous | ci-dessous |
 | `modules/` | utilisé par les scripts, pas lancé directement | ci-dessous |
 
@@ -80,7 +86,17 @@ Le runner `cicd-int` est lancé chaque minute par une tâche planifiée sur la m
 | `protect-token.ps1` | chiffrement du jeton GitLab sur la machine |
 | `diag-token.ps1` | diagnostic du jeton chiffré |
 
-Les scripts du dépôt sont la référence ; ceux de la machine d'intégration en sont une copie (`D:\ci\runner`). Fonctionnement, exploitation et dépannage : `cicd/README.md`. Installation sur un autre projet : `cicd/HOWTO.md`.
+Les scripts du dépôt sont la référence ; ceux de la machine d'intégration en sont une copie (`D:\ci\runner`). Le jeton chiffré (`gitlab-token.dat`) n'existe que sur la machine : il n'est jamais versionné. Fonctionnement, exploitation et dépannage : `runner.md`. Installation sur un autre projet : `HOWTO.md`.
+
+### Téléchargement et déploiement sur les serveurs
+
+| Dossier | Contenu |
+|---|---|
+| `02_download_deploy/` | `download_deploy.ps1` : télécharge le package `Styx.Publish` depuis Artifactory et met à jour, sur le serveur, les applications demandées (`deploy-api.ps1`, `deploy-hpclite.ps1`, `deploy-taskflow.ps1`) ; voir son `README.md` |
+| `03_deploy/` | `deploy.ps1` et les scripts par application ; voir son `README.md` |
+| `tests_download_deploy/` | scénarios de test de `download_deploy.ps1`, rangés par jalon (`jalon_0` à `jalon_19`), lancés par `run_jalon.ps1` ; outils communs dans `_common` et `_tools` ; voir son `README.md` |
+
+Le téléchargement s'authentifie sur Artifactory avec `ARTIFACTORY_USERNAME` et `ARTIFACTORY_TOKEN` ; le push du runner utilise une clé d'API distincte. Le déploiement n'est pas automatisé par le runner.
 
 ## `modules/`
 
