@@ -45,6 +45,7 @@ Cette étape vérifie que la machine est prête. Faites-la une fois connecté à
 | Windows PowerShell 5.1 | `$PSVersionTable.PSVersion` | `5` dans la colonne `Major`, `1` dans `Minor` |
 | Le SDK .NET de l'application | `dotnet --list-sdks` | au moins une ligne, par exemple `8.0.xxx` |
 | L'accès à GitLab | `Test-NetConnection <adresse de GitLab, sans https://> -Port 443` | `TcpTestSucceeded : True` |
+| L'accès à Artifactory | `Test-NetConnection <adresse d'Artifactory, sans https://> -Port 443` | `TcpTestSucceeded : True` |
 
 Si une ligne ne correspond pas, demandez à l'équipe qui gère la machine de corriger avant de continuer.
 
@@ -52,11 +53,13 @@ Si une ligne ne correspond pas, demandez à l'équipe qui gère la machine de co
 
 Cette étape concerne le code du projet, pas la machine. Si vous n'êtes pas développeur, demandez à un développeur de l'équipe de confirmer que tout est en place.
 
-La machine du runner n'a pas accès à Internet ni aux partages réseau. Le projet doit donc contenir **tout ce qu'il faut pour se compiler** :
+La machine du runner n'a pas accès à Internet ni aux partages réseau ; elle a accès à **Artifactory**. Le projet doit donc trouver tout ce qu'il faut pour se compiler, soit sur Artifactory, soit dans le dépôt :
 
-- les paquets NuGet sont dans le dépôt (dossier `nugets`), et `src/backend/nuget.config` n'utilise que ceux-là (ligne `<clear />`) ;
-- aucun projet ne va chercher une DLL sur un partage réseau (chemin commençant par `\\`) ;
-- les fichiers `.nupkg` et `.dll` sont bien enregistrés dans git, même si le `.gitignore` les exclut (`git status --ignored` ne doit afficher aucune ligne `!!` pour eux).
+- les paquets NuGet viennent du dépôt NuGet d'**Artifactory** ;
+- les paquets internes qui ne sont pas (encore) sur Artifactory sont dans le dépôt, dans le dossier `nugets` ; si Artifactory est complet, ce dossier peut être vide ;
+- `src/backend/nuget.config` déclare uniquement ces deux sources, Artifactory et `nugets`, précédées de la ligne `<clear />` : nuget.org est interdit et injoignable, et sans cette ligne la compilation échouerait en essayant de le joindre ;
+- aucun projet ne va chercher une DLL sur un partage réseau (chemin commençant par `\\`) : les DLL externes sont copiées dans le dépôt ;
+- les fichiers `.nupkg` du dossier `nugets` et les `.dll` copiées sont bien enregistrés dans git, même si le `.gitignore` les exclut (`git status --ignored` ne doit afficher aucune ligne `!!` pour eux).
 
 Pour le vérifier, sur un poste de développeur, depuis la racine du dépôt, la commande suivante doit se terminer sans erreur `NU1101`, `NU1102` ni `NU1301` :
 
@@ -388,6 +391,8 @@ Pour donner un autre nom à la tâche planifiée, refaites l'étape 3.6 en ajout
 | `GitLab refuse l'accès (403)` | le jeton n'a pas le rôle Maintainer ou le scope api : refaire l'étape 2.2, puis l'étape 3.4 |
 | `Ressource GitLab introuvable (404)` | le numéro du projet est faux : refaire l'étape 2.1 et corriger `ProjectId` |
 | `Variable GitLab 'ARTIFACTORY_API_KEY' illisible` | la variable n'existe pas ou porte un autre nom : refaire l'étape 2.3 |
+| `Build échoué` avec `NU1101` ou `NU1102` dans le journal | un paquet NuGet n'est ni sur Artifactory ni dans le dossier `nugets` : un développeur doit l'ajouter à l'un des deux (étape 1.3) |
+| `Build échoué` avec `NU1301` dans le journal | une source NuGet est injoignable : vérifier l'accès à Artifactory (étape 1.2) et la ligne `<clear />` de `nuget.config` (étape 1.3) |
 | `Script introuvable dans les sources` | il manque un script dans le projet : voir l'étape 1.3 avec un développeur |
 | `Build échoué` dans une merge request | ce n'est pas un problème du runner : le code ne se compile pas ; le commentaire dans la merge request donne l'erreur |
 | Plus aucune nouvelle ligne dans le journal | vérifier que la tâche existe avec `Get-ScheduledTask -TaskName 'Styx.CiInt'` ; sinon, refaire l'étape 3.6 |
