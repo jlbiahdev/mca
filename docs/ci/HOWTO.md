@@ -33,7 +33,7 @@ Cette étape sert à vérifier que vous avez tout ce qu'il faut. Sans ces accès
 | Le rôle **Maintainer** sur le projet GitLab | pour créer le jeton et la variable de la partie 2 | dans le projet GitLab, le menu de gauche affiche **Settings** |
 | Une connexion **Bureau à distance** à la machine du runner, avec le **compte de service** prévu pour le runner | le runner tournera avec ce compte | vous arrivez à vous connecter à la machine avec ce compte |
 | Ce compte est **administrateur** de la machine | pour créer la tâche planifiée | voir l'étape 3.1 |
-| La **clé Artifactory** qui autorise à déposer des packages | pour la publication | demandez-la à l'équipe qui gère Artifactory |
+| La **clé Artifactory** qui autorise à déposer des packages | pour la publication | voir [Artifactory : comptes, jetons et commandes](../artifactory.md), § 2 (jeton de push, `user_type = user`) |
 
 ### 1.2 Ce que la machine doit avoir
 
@@ -130,6 +130,8 @@ Si **Access tokens** n'apparaît pas dans le menu, GitLab interdit peut-être le
 
 Le runner a besoin de la clé Artifactory pour déposer les packages. Elle est rangée dans GitLab, et non sur la machine : quand la clé change, il suffit de la modifier à un seul endroit.
 
+La clé est formée du **compte de push** et de son **jeton**, séparés par `:` : `usr-<kear_uid>:<jeton>`. Comment obtenir ce jeton, et ne pas le confondre avec celui du compte de déploiement (`usr-cd-…`) : voir [Artifactory : comptes, jetons et commandes](../artifactory.md).
+
 1. Dans le menu de gauche du projet, cliquez sur **Settings**, puis **CI/CD**.
 2. À la section **Variables**, cliquez sur **Expand**, puis sur **Add variable**.
 3. Remplissez le formulaire :
@@ -143,7 +145,7 @@ Le runner a besoin de la clé Artifactory pour déposer les packages. Elle est r
    | Expand variable reference | ne pas cocher |
    | Description | `Clé Artifactory du runner ci-int` |
    | Key | `ARTIFACTORY_API_KEY` (exactement ce texte) |
-   | Value | la clé Artifactory |
+   | Value | `usr-<kear_uid>:<jeton>` (voir ci-dessus) |
 
 4. Cliquez sur **Add variable**.
 
@@ -390,6 +392,7 @@ Pour donner un autre nom à la tâche planifiée, refaites l'étape 3.6 en ajout
 | `GitLab refuse le jeton (401)` | le jeton a été mal collé ou a expiré : refaire l'étape 2.2, puis l'étape 3.4 |
 | `GitLab refuse l'accès (403)` | le jeton n'a pas le rôle Maintainer ou le scope api : refaire l'étape 2.2, puis l'étape 3.4 |
 | `Ressource GitLab introuvable (404)` | le numéro du projet est faux : refaire l'étape 2.1 et corriger `ProjectId` |
+| `Push échoué` avec `401` ou `403` dans le journal du push | mauvais compte ou mauvais jeton dans `ARTIFACTORY_API_KEY` : voir [Artifactory : comptes, jetons et commandes](../artifactory.md), § 1 |
 | `Variable GitLab 'ARTIFACTORY_API_KEY' illisible` | la variable n'existe pas ou porte un autre nom : refaire l'étape 2.3 |
 | `Build échoué` avec `NU1101` ou `NU1102` dans le journal | un paquet NuGet n'est ni sur Artifactory ni dans le dossier `nugets` : un développeur doit l'ajouter à l'un des deux (étape 1.3) |
 | `Build échoué` avec `NU1301` dans le journal | une source NuGet est injoignable : vérifier l'accès à Artifactory (étape 1.2) et la ligne `<clear />` de `nuget.config` (étape 1.3) |
@@ -405,5 +408,5 @@ Pour tout autre message, consultez la partie « Dépannage » de `runner.md`, ou
 ## 7. Après l'installation
 
 - **Date d'expiration du jeton GitLab** : vous l'avez notée à l'étape 2.2. Avant cette date, il faut créer un nouveau jeton (étape 2.2) et l'enregistrer sur la machine (étape 3.4) ; sinon, le runner s'arrêtera de fonctionner ce jour-là. Le détail est dans `runner.md`.
-- **Clé Artifactory** : quand elle change, il suffit de modifier la variable `ARTIFACTORY_API_KEY` dans GitLab (étape 2.3). Rien à faire sur la machine.
+- **Clé Artifactory** : le jeton n'expire pas, mais il doit être remplacé s'il a été exposé. Il suffit alors de modifier la variable `ARTIFACTORY_API_KEY` dans GitLab (étape 2.3), rien à faire sur la machine. La procédure de remplacement est dans [Artifactory : comptes, jetons et commandes](../artifactory.md), § 5.
 - **Place sur le disque** : les dossiers `D:\ci\runner\logs`, `D:\ci\runner\builds` et `D:\ci\packages` grossissent avec le temps et ne sont pas vidés automatiquement. Pensez à les surveiller.
