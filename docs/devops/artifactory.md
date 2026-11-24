@@ -96,9 +96,27 @@ Après la correction d'un push en échec, le commit n'est pas republié automati
 
 ## 6. Restauration des paquets NuGet depuis Artifactory (en attente)
 
-La compilation utilise aujourd'hui les paquets du dossier `nugets` du dépôt. Les tests de restauration depuis Artifactory avec un compte technique ont donné :
+La compilation utilise aujourd'hui les paquets du dossier `nugets` du dépôt. L'objectif est de restaurer depuis le dépôt virtuel `nuget-virtual-<kear_uid>` avec un compte technique, puis de ne garder dans `nugets` que les paquets absents d'Artifactory.
 
-- des refus (403) au téléchargement de paquets publics qui ne sont pas encore en cache dans Artifactory ;
-- en API v2, au plus 100 versions par paquet, ce qui masque les versions récentes.
+Résultats des essais (restauration forcée dans un dossier vide, `--no-cache --force`) :
 
-La question des droits est posée à l'équipe Artifactory. Tant qu'elle n'est pas réglée, `nuget.config` ne déclare que les sources locales (`nugets` et `nugets\socgen`).
+| Essai | Résultat |
+|---|---|
+| Sans identifiants | 401 sur tous les paquets |
+| Compte `usr-…` (push), adresse v2 | authentification acceptée ; 403 au téléchargement de paquets publics ; `NU1102` sur les versions récentes |
+| Compte `usr-…` (push), adresse v3 | `NU1101` sur tous les paquets |
+| Compte `usr-cd-…` (get), adresse v2 | identique au compte de push : 403 au téléchargement de paquets publics (Dapper, Newtonsoft.Json, NLog…) ; `NU1102` sur les versions récentes |
+
+Interprétation :
+
+- **403** : les comptes techniques n'ont pas le droit de télécharger des paquets publics depuis le dépôt virtuel (relais vers nuget.org), au moins pour ceux qui ne sont pas déjà en cache.
+- **`NU1102`** : l'adresse v2 ne renvoie que 100 versions par paquet ; les versions récentes n'y apparaissent pas.
+
+Questions posées à l'équipe Artifactory :
+
+1. Le compte `usr-cd-<kear_uid>` (ou un autre compte technique de l'application) peut-il recevoir le droit de télécharger depuis `nuget-virtual-<kear_uid>`, y compris les paquets publics pas encore en cache ?
+2. Quelle adresse v3 (`index.json`) utiliser pour ce dépôt virtuel ?
+
+À traiter ensuite : vérifier si les paquets internes `SocGen.ApiBank.*` sont sur Artifactory.
+
+Tant que ces points ne sont pas réglés, `nuget.config` ne déclare que les sources locales (`nugets` et `nugets\socgen`). Pour un essai, ne jamais commiter un `nuget.config` contenant des identifiants.
