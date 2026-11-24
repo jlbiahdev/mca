@@ -6,17 +6,17 @@ Ce document explique quel compte Artifactory utiliser pour chaque opération, co
 
 Le projet dispose de deux comptes techniques Artifactory. Ils n'ont pas les mêmes droits : **ne pas les inverser**.
 
-| Opération | Compte | Forme du nom | Utilisé par |
-|---|---|---|---|
-| **Push** : déposer un package | compte projet (`user`) | `usr-<kear_uid>` | runner `ci-int` (publication de `main`), `push-artifactory.ps1` |
-| **Get** : télécharger un package | compte de déploiement (`user-cd`) | `usr-cd-<kear_uid>` | `download_deploy.ps1` |
+| Usage | Compte | Forme du nom | Opérations | Utilisé par |
+|---|---|---|---|---|
+| **Build** | compte projet (`user`) | `usr-<kear_uid>` | restaurer les paquets NuGet de la solution, déposer (push) le package | runner `ci-int` (build des MR, publication de `main`), `push-artifactory.ps1` |
+| **Déploiement** | compte de déploiement (`user-cd`) | `usr-cd-<kear_uid>` | télécharger (get) le package à déployer | `download_deploy.ps1` |
 
 Symptômes d'une inversion ou d'une erreur de compte :
 
 | Code renvoyé | Signification | Action |
 |---|---|---|
 | **401** Unauthorized | le compte et le jeton ne vont pas ensemble, ou le jeton est expiré ou révoqué | vérifier que le nom du compte est exactement celui renvoyé avec le jeton (§ 2) ; sinon, recréer le jeton |
-| **403** Forbidden | le compte est reconnu mais n'a pas le droit pour cette opération | vérifier qu'on utilise le bon compte (tableau ci-dessus) |
+| **403** Forbidden | le compte est reconnu mais n'a pas le droit pour cette opération | vérifier qu'on utilise le bon compte (tableau ci-dessus) : c'est presque toujours une inversion `user` / `user-cd` |
 | **409** Conflict (push) | cette version existe déjà sur Artifactory | rien à faire : un nouveau commit sur `main` produira une nouvelle version |
 
 ## 2. Obtenir un jeton
@@ -30,7 +30,7 @@ POST /projects/{kear_uid}/tokens?user_type=<type>
 | Paramètre | Où | Valeur |
 |---|---|---|
 | `kear_uid` | dans l'adresse (obligatoire) | identifiant KEAR de l'application, le même que celui qui apparaît dans le nom des comptes et des dépôts |
-| `user_type` | dans la requête | `user` pour le jeton de push, `user-cd` pour le jeton de get |
+| `user_type` | dans la requête | `user` pour le jeton de build (restauration et push), `user-cd` pour le jeton de déploiement (get) |
 
 Depuis la page de l'API (interface Swagger) :
 
@@ -58,13 +58,31 @@ La réponse a cette forme :
 
 ## 3. Commandes
 
-**Push**, la clé est la forme `<compte>:<jeton>` :
+**Restauration des paquets NuGet** (build) : la source Artifactory est le dépôt virtuel `nuget-virtual-<kear_uid>`, déclaré dans `src/backend/nuget.config`. Les identifiants n'y sont jamais écrits en clair : ils sont lus dans des variables d'environnement.
+
+```xml
+<packageSources>
+  <clear />
+  <add key="ArtifactoryV2" value="https://<artifactory>/artifactory/api/nuget/nuget-virtual-<kear_uid>" />
+  <add key="OfflineSocGen" value="..\..\nugets\socgen" />
+</packageSources>
+<packageSourceCredentials>
+  <ArtifactoryV2>
+    <add key="Username" value="%ARTIFACTORY_BUILD_USERNAME%" />
+    <add key="ClearTextPassword" value="%ARTIFACTORY_BUILD_TOKEN%" />
+  </ArtifactoryV2>
+</packageSourceCredentials>
+```
+
+`nugets\socgen` contient les paquets internes qui ne sont pas sur Artifactory (§ 6).
+
+**Push** (build), la clé est la forme `<compte>:<jeton>` :
 
 ```powershell
 dotnet nuget push <package>.nupkg --api-key "usr-<kear_uid>:<jeton>" --source https://<artifactory>/artifactory/api/nuget/v3/<dépôt>
 ```
 
-**Get** :
+**Get** (déploiement) :
 
 ```powershell
 curl.exe -u "usr-cd-<kear_uid>:<jeton>" -L -o <package>.nupkg https://<artifactory>/artifactory/<dépôt>/<package>.nupkg
@@ -78,8 +96,9 @@ En pratique, ces commandes ne se tapent pas à la main : les scripts lisent les 
 
 | Jeton | Emplacement | Lu par |
 |---|---|---|
-| Push (`usr-…`) | variable GitLab `ARTIFACTORY_API_KEY` (masquée), valeur `usr-<kear_uid>:<jeton>` | runner `ci-int`, qui la transmet à `push-artifactory.ps1` |
-| Get (`usr-cd-…`) | variables d'environnement `ARTIFACTORY_USERNAME` (`usr-cd-<kear_uid>`) et `ARTIFACTORY_TOKEN` (`<jeton>`) | `download_deploy.ps1` |
+| Build : push (`usr-…`) | variable GitLab `ARTIFACTORY_API_KEY` (masquée), valeur `usr-<kear_uid>:<jeton>` | runner `ci-int`, qui la transmet à `push-artifactory.ps1` |
+| Build : restauration (`usr-…`) | variables d'environnement `ARTIFACTORY_BUILD_USERNAME` et `ARTIFACTORY_BUILD_TOKEN`, lues par `nuget.config` | runner `ci-int` (à mettre en place, § 6) ; sur un poste de développeur, à définir dans la session |
+| Déploiement : get (`usr-cd-…`) | variables d'environnement `ARTIFACTORY_USERNAME` (`usr-cd-<kear_uid>`) et `ARTIFACTORY_TOKEN` (`<jeton>`) | `download_deploy.ps1` |
 
 Pour la variable GitLab : **Settings > CI/CD > Variables**, voir le HOWTO du runner.
 
@@ -94,29 +113,23 @@ Révoquer d'abord coupe le push ou le téléchargement jusqu'à la mise en place
 
 Après la correction d'un push en échec, le commit n'est pas republié automatiquement : supprimer sa ligne dans `D:\ci\runner\processed-publish.txt`, ou fusionner un nouveau commit dans `main`.
 
-## 6. Restauration des paquets NuGet depuis Artifactory (en attente)
+## 6. Restauration des paquets NuGet depuis Artifactory
 
-La compilation utilise aujourd'hui les paquets du dossier `nugets` du dépôt. L'objectif est de restaurer depuis le dépôt virtuel `nuget-virtual-<kear_uid>` avec un compte technique, puis de ne garder dans `nugets` que les paquets absents d'Artifactory.
+Vérifié sur un poste de développeur, restauration forcée dans un dossier vide (`dotnet restore --packages <dossier vide> --no-cache --force`) avec le compte `user` :
 
-Résultats des essais (restauration forcée dans un dossier vide, `--no-cache --force`) :
-
-| Essai | Résultat |
+| Sources déclarées | Résultat |
 |---|---|
-| Sans identifiants | 401 sur tous les paquets |
-| Compte `usr-…` (push), adresse v2 | authentification acceptée ; 403 au téléchargement de paquets publics ; `NU1102` sur les versions récentes |
-| Compte `usr-…` (push), adresse v3 | `NU1101` sur tous les paquets |
-| Compte `usr-cd-…` (get), adresse v2 | identique au compte de push : 403 au téléchargement de paquets publics (Dapper, Newtonsoft.Json, NLog…) ; `NU1102` sur les versions récentes |
+| Artifactory seul | tous les paquets publics restaurés ; 4 erreurs `NU1101` sur les paquets internes `SocGen.ApiBank.*` |
+| Artifactory et `nugets\socgen` | restauration complète |
 
-Interprétation :
+Les échecs des essais précédents (403 au téléchargement, `NU1102`) venaient d'une inversion entre les comptes `user` et `user-cd`.
 
-- **403** : les comptes techniques n'ont pas le droit de télécharger des paquets publics depuis le dépôt virtuel (relais vers nuget.org), au moins pour ceux qui ne sont pas déjà en cache.
-- **`NU1102`** : l'adresse v2 ne renvoie que 100 versions par paquet ; les versions récentes n'y apparaissent pas.
+Conséquences :
 
-Questions posées à l'équipe Artifactory :
+- le dossier `nugets` peut être réduit à `nugets\socgen` : les paquets publics viennent d'Artifactory ;
+- `nuget.config` déclare `ArtifactoryV2` et `OfflineSocGen` (§ 3) ;
+- le runner `ci-int` doit fournir `ARTIFACTORY_BUILD_USERNAME` et `ARTIFACTORY_BUILD_TOKEN` au build et au package (à mettre en place).
 
-1. Le compte `usr-cd-<kear_uid>` (ou un autre compte technique de l'application) peut-il recevoir le droit de télécharger depuis `nuget-virtual-<kear_uid>`, y compris les paquets publics pas encore en cache ?
-2. Quelle adresse v3 (`index.json`) utiliser pour ce dépôt virtuel ?
+Reste à voir avec l'équipe Artifactory : la publication des paquets internes `SocGen.ApiBank.*` sur Artifactory, ce qui permettrait de supprimer complètement le dossier `nugets`.
 
-À traiter ensuite : vérifier si les paquets internes `SocGen.ApiBank.*` sont sur Artifactory.
-
-Tant que ces points ne sont pas réglés, `nuget.config` ne déclare que les sources locales (`nugets` et `nugets\socgen`). Pour un essai, ne jamais commiter un `nuget.config` contenant des identifiants.
+Ne jamais commiter un `nuget.config` contenant des identifiants en clair.
