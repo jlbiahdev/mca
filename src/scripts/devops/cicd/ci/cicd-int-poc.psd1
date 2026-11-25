@@ -19,7 +19,7 @@
     # commit : ne rien y mettre d'autre.
     BuildRoot  = 'D:\ci\build'
 
-    # ── Build (merge requests) ──────────────────────────────────────────
+    # ── Build (CI, merge requests) ──────────────────────────────────────────
     # Script de build, relatif à la racine des sources téléchargées.
     BuildScript         = 'src\scripts\devops\int\build.ps1'
 
@@ -33,12 +33,12 @@
     # Nom du statut affiché sur les commits des MR.
     StatusName = 'ci-int'
 
-    # ── Publication (publication, branche main) ──────────────────────────────────────
+    # ── Publication (CD, branche main) ──────────────────────────────────────
     # Branche dont chaque nouveau commit est packagé et publié.
-    PublishBranch     = 'main'
+    CdBranch     = 'main'
 
     # Nom du statut affiché sur les commits de main.
-    PublishStatusName = 'ci-int-publish'
+    CdStatusName = 'cd-int'
 
     # Scripts de package et de push, relatifs à la racine des sources.
     PackageScript = 'src\scripts\devops\int\package.ps1'

@@ -2,15 +2,15 @@
 
 <#
 .SYNOPSIS
-    Runner CI d'intégration : à chaque passage, compile le dernier commit
+    Runner CI/CD d'intégration : à chaque passage, compile le dernier commit
     des merge requests ouvertes (CI), puis package et publie sur Artifactory
-    le dernier commit de main (publication).
+    le dernier commit de main (CD).
 
 .DESCRIPTION
-    Le script est lancé chaque minute par la tâche planifiée Styx.CiInt et
+    Le script est lancé chaque minute par la tâche planifiée Styx.CicdIntPoc et
     fait un seul passage :
 
-    1. lit la configuration (ci-int.psd1) et le jeton GitLab chiffré ;
+    1. lit la configuration (cicd-int-poc.psd1) et le jeton GitLab chiffré ;
     2. CI : pour chaque MR ouverte dont le dernier commit n'a pas été traité :
        - publie le statut « en cours » (StatusName) sur le commit ;
        - télécharge les sources du commit (zip généré par GitLab, sans git) ;
@@ -20,23 +20,23 @@
          un lien vers le journal ;
        - en cas d'échec, publie dans la MR un commentaire avec les erreurs ;
        - note le commit comme traité (processed.txt) ;
-    3. Publication : si le dernier commit de PublishBranch (main) n'a pas été publié :
-       - publie le statut « en cours » (PublishStatusName) et lit l'identifiant du
+    3. CD : si le dernier commit de CdBranch (main) n'a pas été publié :
+       - publie le statut « en cours » (CdStatusName) et lit l'identifiant du
          pipeline externe créé par GitLab : il donne la version du package ;
        - télécharge les sources, lance le script de package avec cette
          version, puis le script de push avec la clé Artifactory lue dans une
          variable GitLab ;
        - dépose les journaux dans GitLab, publie « réussi » ou « échoué » ;
-       - note le commit comme traité (processed-publish.txt).
+       - note le commit comme traité (processed-cd.txt).
 
     Une erreur du runner (GitLab injoignable, téléchargement impossible) ne
     marque pas le commit comme traité : il est repris au passage suivant.
 
 .PARAMETER ConfigFile
-    Fichier de configuration. Par défaut : ci-int.psd1, à côté du script.
+    Fichier de configuration. Par défaut : cicd-int-poc.psd1, à côté du script.
 
 .EXAMPLE
-    .\ci-int.ps1
+    .\cicd-int-poc.ps1
 
 .NOTES
     Code de sortie : 0 succès (y compris build en échec, publié dans GitLab),
@@ -53,7 +53,7 @@ $ErrorActionPreference = 'Stop'
 # En Windows PowerShell 5.1, $PSScriptRoot est vide dans les valeurs par défaut
 # du bloc param() : le chemin par défaut est donc calculé ici.
 if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
-    $ConfigFile = Join-Path $PSScriptRoot 'ci-int.psd1'
+    $ConfigFile = Join-Path $PSScriptRoot 'cicd-int-poc.psd1'
 }
 
 # La barre de progression ralentit fortement les téléchargements en PowerShell 5.1.
@@ -80,7 +80,7 @@ function Read-CiConfiguration {
         'GitLabUrl', 'ProjectId', 'TokenFile', 'RunnerRoot',
         'BuildRoot', 'BuildScript', 'BuildEnvironment',
         'BuildTimeoutMinutes', 'StatusName',
-        'PublishBranch', 'PublishStatusName', 'PackageScript', 'PushScript',
+        'CdBranch', 'CdStatusName', 'PackageScript', 'PushScript',
         'PackageRoot', 'VersionFormat', 'ArtifactoryKeyVariable',
         'BuildUsernameVariable', 'BuildTokenVariable'
     )
@@ -146,7 +146,7 @@ function Write-CiLog {
 function Initialize-CiLog {
     $logFolder = Join-Path $script:Config.RunnerRoot 'logs'
     New-Item -ItemType Directory -Path $logFolder -Force | Out-Null
-    $script:LogFile = Join-Path $logFolder ('ci-int-{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
+    $script:LogFile = Join-Path $logFolder ('cicd-int-poc-{0}.log' -f (Get-Date -Format 'yyyyMMdd'))
 }
 
 # ── GitLab ───────────────────────────────────────────────────────────────────
@@ -397,7 +397,7 @@ function Get-BranchHead {
         [string] $Token
     )
 
-    $branch = [uri]::EscapeDataString($script:Config.PublishBranch)
+    $branch = [uri]::EscapeDataString($script:Config.CdBranch)
     $path = 'projects/{0}/repository/branches/{1}' -f $script:Config.ProjectId, $branch
     return (Invoke-GitLabApi -Path $path -Token $Token).commit
 }
@@ -904,7 +904,7 @@ function New-FailureNote {
 
 function Get-ProcessedFile {
     param(
-        # processed.txt pour les MR, processed-publish.txt pour main.
+        # processed.txt pour la CI, processed-cd.txt pour la CD.
         [string] $Name = 'processed.txt'
     )
 
@@ -930,7 +930,7 @@ function Add-Processed {
         [Parameter(Mandatory)]
         [string] $Commit,
 
-        # « MR !<numéro> » pour les MR, « main 1.0.<pipeline> » pour main.
+        # « MR !<numéro> » pour la CI, « main 1.0.<pipeline> » pour la CD.
         [Parameter(Mandatory)]
         [string] $Origin,
 
@@ -1055,9 +1055,9 @@ function Invoke-ReleaseBuild {
 
     $head = Get-BranchHead -Token $Token
     $commit = $head.id
-    $branch = $script:Config.PublishBranch
+    $branch = $script:Config.CdBranch
 
-    if (Test-AlreadyProcessed -Commit $commit -Name 'processed-publish.txt') {
+    if (Test-AlreadyProcessed -Commit $commit -Name 'processed-cd.txt') {
         return $false
     }
 
@@ -1073,7 +1073,7 @@ function Invoke-ReleaseBuild {
 
     if ($missing.Count -gt 0) {
         Write-CiLog "Branche $branch : commit $commit ignoré, scripts absents du commit : $($missing -join ', ')" 'ATTENTION'
-        Add-Processed -Commit $commit -Origin $branch -Result 'ignored' -Name 'processed-publish.txt'
+        Add-Processed -Commit $commit -Origin $branch -Result 'ignored' -Name 'processed-cd.txt'
         return $true
     }
 
@@ -1085,7 +1085,7 @@ function Invoke-ReleaseBuild {
         Token  = $Token
         Commit = $commit
         Ref    = $branch
-        Name   = $script:Config.PublishStatusName
+        Name   = $script:Config.CdStatusName
     }
 
     $pipelineId = Set-CommitStatus @statusTarget -State running -Description "Package en cours sur $env:COMPUTERNAME"
@@ -1178,7 +1178,7 @@ function Invoke-ReleaseBuild {
     $null = Set-CommitStatus @statusTarget -PipelineId $pipelineId `
         -State $state -Description $description -TargetUrl $linkUrl
 
-    Add-Processed -Commit $commit -Origin "$branch $version" -Result $state -Name 'processed-publish.txt'
+    Add-Processed -Commit $commit -Origin "$branch $version" -Result $state -Name 'processed-cd.txt'
     return $true
 }
 
@@ -1193,7 +1193,7 @@ try {
     Initialize-CiLog
 
     # Un seul passage à la fois : le verrou est libéré à la fin du processus.
-    $lockFile = Join-Path $script:Config.RunnerRoot 'ci-int.lock'
+    $lockFile = Join-Path $script:Config.RunnerRoot 'cicd-int-poc.lock'
     try {
         $lock = [IO.File]::Open($lockFile, 'OpenOrCreate', 'ReadWrite', 'None')
     }
@@ -1219,7 +1219,7 @@ try {
 
     $exitCode = 0
 
-    # CI des MR et publication de main sont indépendantes : une erreur de l'une n'empêche pas l'autre.
+    # CI et CD sont indépendantes : une erreur de l'une n'empêche pas l'autre.
     try {
         $mergeRequests = @(Get-OpenMergeRequests -Token $token)
         $toProcess = @(
@@ -1250,14 +1250,14 @@ try {
         $published = Invoke-ReleaseBuild -Token $token
     }
     catch {
-        Write-CiLog "Publication : $($_.Exception.Message)" 'ERREUR'
+        Write-CiLog "CD : $($_.Exception.Message)" 'ERREUR'
         $published = $true
         $exitCode = 1
     }
 
     # Passage sans rien à faire : une seule ligne dans le journal.
     if ($ciSummary -and -not $published) {
-        Write-CiLog "$ciSummary, $($script:Config.PublishBranch) à jour."
+        Write-CiLog "$ciSummary, $($script:Config.CdBranch) à jour."
     }
 
     exit $exitCode
