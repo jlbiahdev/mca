@@ -16,16 +16,16 @@ Dans ce document :
 
 ## 1. Le trigramme
 
-La création du trigramme dans **KAT** crée automatiquement ses entrées dans **DIN**, pour les trois environnements : DEV, UAT et PRD. Si le trigramme existe déjà dans DIN, passer à l'étape 2.
+La création du trigramme dans **KAT** (`go/kat`) crée automatiquement ses entrées dans **DIN** (DoItNow, `go/din`), pour les trois environnements : DEV, UAT et PRD. Si le trigramme existe déjà dans DIN, passer à l'étape 2.
 
 ---
 
 ## 2. Créer les rôles
 
-Les rôles donnent les droits sur la machine. Ils se créent dans DIN.
+Les rôles donnent les droits sur la machine. Ils se créent dans DIN (`go/din`).
 
 1. Aller dans **Access Governance > Roles > Create**.
-2. Créer les trois rôles ci-dessous, avec leurs droits.
+2. Créer les trois rôles ci-dessous, avec leurs droits. Tous portent le trigramme de la machine (pour la machine de build : `H-STU_…`).
 
 | Rôle | Droits |
 |---|---|
@@ -48,7 +48,7 @@ Les personnes qui administrent la machine reçoivent les rôles `ADMIN_VCS` et `
 
 ## 4. Créer la machine (VCS)
 
-1. Revenir à l'accueil de DIN.
+1. Revenir à l'accueil de DIN (`go/din`).
 2. Sélectionner **VCS**.
 3. Cliquer sur **Create server > VCS Gen2**.
 4. **Name** : le nom de la machine, selon la convention de l'équipe (pour la machine de build : `cld<env>bld<numéro>`, « cloud, environnement, build, numéro »).
