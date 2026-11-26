@@ -25,7 +25,7 @@ La création du trigramme dans **KAT** (`go/kat`) crée automatiquement ses entr
 Les rôles donnent les droits sur la machine. Ils se créent dans DIN (`go/din`).
 
 1. Aller dans **Access Governance > Roles > Create**.
-2. Créer les trois rôles ci-dessous, avec leurs droits. Saisir seulement le nom de la colonne « Nom à saisir » : DIN ajoute lui-même le préfixe `H-<TRI>_<CODE>_<ENV>-` (pour la machine de build : `H-STU_…`).
+2. Créer les trois rôles ci-dessous, avec leurs droits. Saisir seulement le nom de la colonne « Nom à saisir » : DIN ajoute lui-même le préfixe `H-<TRI>_<CODE>_<ENV>-` (pour la machine de build : `H-STU_…`). C'est le seul moment où le préfixe ne se saisit pas : ensuite, les rôles se désignent par leur nom complet.
 
 | Nom à saisir | Droits |
 |---|---|
@@ -39,10 +39,10 @@ Les rôles donnent les droits sur la machine. Ils se créent dans DIN (`go/din`)
 
 Les personnes qui administrent la machine reçoivent les rôles `ADMIN_VCS` et `BASTION_VCS`.
 
-1. Dans **Access Governance > Roles**, cocher le rôle `ADMIN_VCS` (affiché avec son préfixe : `H-<TRI>_<CODE>_<ENV>-ADMIN_VCS`).
+1. Dans **Access Governance > Roles**, cocher le rôle `H-<TRI>_<CODE>_<ENV>-ADMIN_VCS`.
 2. Cliquer sur **Actions > Grant Identities**.
 3. Dans **Users**, ajouter l'adresse mail de chaque personne.
-4. Recommencer avec le rôle `BASTION_VCS`.
+4. Recommencer avec le rôle `H-<TRI>_<CODE>_<ENV>-BASTION_VCS`.
 
 ---
 
