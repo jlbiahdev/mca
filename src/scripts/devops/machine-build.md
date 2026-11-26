@@ -25,13 +25,13 @@ La création du trigramme dans **KAT** (`go/kat`) crée automatiquement ses entr
 Les rôles donnent les droits sur la machine. Ils se créent dans DIN (`go/din`).
 
 1. Aller dans **Access Governance > Roles > Create**.
-2. Créer les trois rôles ci-dessous, avec leurs droits. Tous portent le trigramme de la machine (pour la machine de build : `H-STU_…`).
+2. Créer les trois rôles ci-dessous, avec leurs droits. Saisir seulement le nom de la colonne « Nom à saisir » : DIN ajoute lui-même le préfixe `H-<TRI>_<CODE>_<ENV>-` (pour la machine de build : `H-STU_…`).
 
-| Rôle | Droits |
+| Nom à saisir | Droits |
 |---|---|
-| `H-<TRI>_<CODE>_<ENV>-WSA` | `wsa:rp:act_as_part_os`, `wsa:rp:adjust_mem_quotas`, `wsa:rp:administrators`, `wsa:rp:allow_authenticate`, `wsa:rp:backup_operators`, `wsa:rp:bypass_checking`, `wsa:rp:create_global_obj`, `wsa:rp:debug_prog`, `wsa:rp:deny_remote_desktop`, `wsa:rp:enable_deleg`, `wsa:rp:impersonate_auth`, `wsa:rp:lock_pages_mem`, `wsa:rp:logon_batch`, `wsa:rp:logon_locally`, `wsa:rp:logon_service`, `wsa:rp:perf_volume_tasks`, `wsa:rp:power_users`, `wsa:rp:profile_sys_perf`, `wsa:rp:remote_desktop_users`, `wsa:rp:replace_token`, `wsa:rp:users` |
-| `H-<TRI>_<CODE>_<ENV>-ADMIN_VCS` | `accaas:readwrite_account`, `acl:read_all_client`, `acl:read_client`, `acl:read_serviceaccount`, `acl:read_subjects`, `acl:readwrite_client`, `acl:readwrite_serviceaccount`, `dns:admin_dns_records`, `dns:admin_dns_zones`, `dns:read_dns_records`, `dns:read_dns_zones`, `dns:read_resources`, `files:admin`, `files:read`, `files:rp:admin_smb`, `files:write`, `secret:delete`, `secret:read`, `secret:write`, `vcs:read`, `vcs:write`, `vcs:write_image` |
-| `H-<TRI>_<CODE>_<ENV>-BASTION_VCS` | `virtualserver:rp:localadmin_windows` (administrer une machine VCS) |
+| `WSA` | `wsa:rp:act_as_part_os`, `wsa:rp:adjust_mem_quotas`, `wsa:rp:administrators`, `wsa:rp:allow_authenticate`, `wsa:rp:backup_operators`, `wsa:rp:bypass_checking`, `wsa:rp:create_global_obj`, `wsa:rp:debug_prog`, `wsa:rp:deny_remote_desktop`, `wsa:rp:enable_deleg`, `wsa:rp:impersonate_auth`, `wsa:rp:lock_pages_mem`, `wsa:rp:logon_batch`, `wsa:rp:logon_locally`, `wsa:rp:logon_service`, `wsa:rp:perf_volume_tasks`, `wsa:rp:power_users`, `wsa:rp:profile_sys_perf`, `wsa:rp:remote_desktop_users`, `wsa:rp:replace_token`, `wsa:rp:users` |
+| `ADMIN_VCS` | `accaas:readwrite_account`, `acl:read_all_client`, `acl:read_client`, `acl:read_serviceaccount`, `acl:read_subjects`, `acl:readwrite_client`, `acl:readwrite_serviceaccount`, `dns:admin_dns_records`, `dns:admin_dns_zones`, `dns:read_dns_records`, `dns:read_dns_zones`, `dns:read_resources`, `files:admin`, `files:read`, `files:rp:admin_smb`, `files:write`, `secret:delete`, `secret:read`, `secret:write`, `vcs:read`, `vcs:write`, `vcs:write_image` |
+| `BASTION_VCS` | `virtualserver:rp:localadmin_windows` (administrer une machine VCS) |
 
 ---
 
@@ -39,10 +39,10 @@ Les rôles donnent les droits sur la machine. Ils se créent dans DIN (`go/din`)
 
 Les personnes qui administrent la machine reçoivent les rôles `ADMIN_VCS` et `BASTION_VCS`.
 
-1. Dans **Access Governance > Roles**, cocher le rôle `H-<TRI>_<CODE>_<ENV>-ADMIN_VCS`.
+1. Dans **Access Governance > Roles**, cocher le rôle `ADMIN_VCS` (affiché avec son préfixe : `H-<TRI>_<CODE>_<ENV>-ADMIN_VCS`).
 2. Cliquer sur **Actions > Grant Identities**.
 3. Dans **Users**, ajouter l'adresse mail de chaque personne.
-4. Recommencer avec le rôle `H-<TRI>_<CODE>_<ENV>-BASTION_VCS`.
+4. Recommencer avec le rôle `BASTION_VCS`.
 
 ---
 
